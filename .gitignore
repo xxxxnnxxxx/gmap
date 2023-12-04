@@ -1,0 +1,4 @@
+build/
+go.sum
+.idea/
+cmd/example.go
