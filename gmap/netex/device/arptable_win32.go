@@ -53,14 +53,6 @@ func InitARPLib() error {
 		}
 	}
 
-	if getMacAddr == nil {
-		getMacAddr, err = globalModuleOfArpLib.FindProc("GetMacAddress")
-		if err != nil {
-			globalModuleOfArpLib.Release()
-			return err
-		}
-	}
-
 	return nil
 }
 
