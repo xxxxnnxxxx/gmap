@@ -4,5 +4,9 @@
 
 例如：
 ```shell
+# syn scan
 gmap.exe -p 1-65535 -sS 192.168.1.3
+
+# connect scan
+gmap.exe -p 1-65535 -sT 192.168.1.3
 ```
