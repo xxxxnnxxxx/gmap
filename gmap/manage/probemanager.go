@@ -412,3 +412,8 @@ func (p *ProbeManager) PrintResult() {
 
 	fmt.Println(end)
 }
+
+// 结果输出为json
+func (p *ProbeManager) Result2JSON() (string, error) {
+	return "", nil
+}
