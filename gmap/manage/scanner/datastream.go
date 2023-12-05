@@ -11,16 +11,16 @@ import (
 
 // 端口扫描参数
 type Port struct {
-	Lock           sync.RWMutex
-	PortType       int    // 端口类型 PortType_TCP/PortType_UDP
-	SrcPort        uint16 // 源端口
-	Val            uint16
-	State          int
-	NmapSeviceInfo []*nmap_service_probe.NmapServiceNode
-	SrvInfo        []string
-	IsFinished     bool      // 是否完成端口扫描
-	AttmptNum      int       // 尝试次数，
-	STime          time.Time // 最近一次发送请求时间
+	Lock           sync.RWMutex                          `json:"-"`
+	PortType       int                                   `json:"Type"` // 端口类型 PortType_TCP/PortType_UDP
+	SrcPort        uint16                                // 源端口
+	Val            uint16                                `json:"Port"`
+	State          int                                   `json:"State"`
+	NmapSeviceInfo []*nmap_service_probe.NmapServiceNode `json:"-"`
+	SrvInfo        []string                              `json:"services""`
+	IsFinished     bool                                  `json:"-"` // 是否完成端口扫描
+	AttmptNum      int                                   `json:"-"` // 尝试次数，
+	STime          time.Time                             `json:"-"` // 最近一次发送请求时间
 }
 
 func NewPort() *Port {
