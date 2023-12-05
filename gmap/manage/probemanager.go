@@ -30,6 +30,16 @@ func NewTargetIP() *TargetIP {
 	}
 }
 
+type ScanTarget struct {
+	IP    string
+	Ports []*scanner.Port
+}
+
+type ResultSet struct {
+	TestTime time.Time     `json:"TestTime"` // 启动时间
+	Targets  []*ScanTarget `json:"Targets"`  // 目标
+}
+
 type ProbeManager struct {
 	ScanType       int      // 端口扫描类型
 	IsSrvDetective bool     // 服务探测库，目前只有nmap
