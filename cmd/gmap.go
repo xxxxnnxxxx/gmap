@@ -25,6 +25,7 @@ func main() {
 	var ifindex uint // 指定索引
 	var pif bool
 	var isDectivePing bool // 执行ping
+	var outputpath string
 
 	flag.BoolVar(&sS, "sS", false, "SYN port scan")
 	flag.BoolVar(&sT, "sT", false, "TCP connect port scan")
@@ -43,6 +44,7 @@ func main() {
 	flag.BoolVar(&route, "route", false, "print route table")
 	flag.UintVar(&ifindex, "if", 0, "a interface index for the scanner")
 	flag.BoolVar(&pif, "pif", false, "print interface info")
+	flag.StringVar(&outputpath, "o", "", "output json file")
 
 	flag.Parse()
 
@@ -110,6 +112,11 @@ func main() {
 
 	if isSrvDetection {
 		probeManager.IsSrvDetective = isSrvDetection
+	}
+
+	// 输出路径
+	if len(outputpath) > 0 {
+		probeManager.OutputPath = outputpath
 	}
 
 	// 端口

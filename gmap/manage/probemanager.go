@@ -64,6 +64,8 @@ type ProbeManager struct {
 	II      *device.InterfaceInfo // 接口信息
 	//
 	startTime time.Time // 启动时间
+	//
+	OutputPath string // 输出路径
 }
 
 func NewProbeManager() *ProbeManager {
