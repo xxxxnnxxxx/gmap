@@ -1,9 +1,9 @@
 package scanner
 
 import (
-	"fmt"
 	"golang.org/x/net/icmp"
 	"golang.org/x/net/ipv4"
+	"golang.org/x/net/ipv6"
 	"net"
 	"os"
 )
@@ -11,26 +11,54 @@ import (
 func DetectActive(dstIP string) (bool, error) {
 	// 目标地址
 	targetAddr, err := net.ResolveIPAddr("ip4", dstIP)
+	bIPv6 := false
 	if err != nil {
-		return false, err
+		targetAddr, err = net.ResolveIPAddr("ipv6", dstIP)
+		if err != nil {
+			return false, err
+		} else {
+			bIPv6 = true
+		}
 	}
 
 	// 创建 ICMP Socket
-	conn, err := icmp.ListenPacket("ip4:icmp", "0.0.0.0")
-	if err != nil {
-		return false, err
+	var conn *icmp.PacketConn
+	if bIPv6 {
+		conn, err = icmp.ListenPacket("ip4:icmp", "0.0.0.0")
+		if err != nil {
+			return false, err
+		}
+	} else {
+		conn, err = icmp.ListenPacket("ip6:ipv6-icmp", "::")
+		if err != nil {
+			return false, err
+		}
 	}
+
 	defer conn.Close()
 
 	// 准备 ICMP Echo Request
-	echoRequest := icmp.Message{
-		Type: ipv4.ICMPTypeEcho,
-		Code: 0,
-		Body: &icmp.Echo{
-			ID:   os.Getpid() & 0xffff,
-			Seq:  1,
-			Data: []byte("ok"),
-		},
+	var echoRequest icmp.Message
+	if bIPv6 {
+		echoRequest = icmp.Message{
+			Type: ipv4.ICMPTypeEcho,
+			Code: 0,
+			Body: &icmp.Echo{
+				ID:   os.Getpid() & 0xffff,
+				Seq:  1,
+				Data: []byte("ok"),
+			},
+		}
+	} else {
+		echoRequest = icmp.Message{
+			Type: ipv6.ICMPTypeEchoReply,
+			Code: 0,
+			Body: &icmp.Echo{
+				ID:   os.Getpid() & 0xffff,
+				Seq:  1,
+				Data: []byte("ok"),
+			},
+		}
 	}
 
 	// 将 ICMP Echo Request 序列化为字节
@@ -54,8 +82,7 @@ func DetectActive(dstIP string) (bool, error) {
 
 	reply, err := icmp.ParseMessage(ipv4.ICMPTypeEchoReply.Protocol(), replyBuffer)
 	if err != nil {
-		fmt.Println("Error parsing ICMP message:", err)
-		os.Exit(1)
+		return false, err
 	}
 
 	/*
