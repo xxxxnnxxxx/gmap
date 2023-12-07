@@ -135,6 +135,18 @@ func IsFileExist(path string) bool {
 	return true
 }
 
+func IsDir(path string) bool {
+	s, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return s.IsDir()
+}
+
+func IsFile(path string) bool {
+	return !IsDir(path)
+}
+
 func TrimEx(s string) string {
 	if len(s) == 0 {
 		return s
@@ -373,4 +385,15 @@ func Hex2Str(content []byte) string {
 	}
 
 	return result
+}
+
+func WriteFile(file string, data []byte) (int, error) {
+	f, err := os.Create(file)
+	if err != nil {
+		return -1, err
+	}
+	writed, err := f.Write(data)
+
+	f.Close()
+	return writed, err
 }
