@@ -1,9 +1,9 @@
 package http
 
 import (
-	"ProbeTools/gmap/common"
-	"ProbeTools/gmap/log"
-	"ProbeTools/gmap/netex/sock"
+	"Gmap/gmap/common"
+	"Gmap/gmap/log"
+	"Gmap/gmap/netex/sock"
 	"bytes"
 	"errors"
 	"fmt"
