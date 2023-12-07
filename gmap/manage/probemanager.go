@@ -21,6 +21,7 @@ import (
 
 type TargetIP struct {
 	IP       net.IP
+	IsUp     bool // 是否活跃
 	Nexthops []*device.NexthopInfo
 }
 
