@@ -30,14 +30,19 @@ func NewTargetIP() *TargetIP {
 	}
 }
 
-type ScanTarget struct {
-	IP    string
-	Ports []*scanner.Port
+type Target struct {
+	IP            string          `json:"ip"`             // IP地址
+	IsUp          bool            `json:"isup"`           // 是否在线
+	OpenPorts     []*scanner.Port `json:"open-ports"`     // 开放端口
+	FilteredPorts []*scanner.Port `json:"filtered-ports"` // 过滤端口
+	ClosedPorts   []*scanner.Port `json:"closed-ports"`   // 关闭端口
 }
 
 type ResultSet struct {
-	TestTime time.Time     `json:"TestTime"` // 启动时间
-	Targets  []*ScanTarget `json:"Targets"`  // 目标
+	StartTime   time.Time `json:"StartTime"` // 启动时间
+	EndTime     time.Time `json:"EndTime"`   // 结束时间
+	PortScanned []uint16  `json:"ports"`     // 被扫描的端口，扫描参数
+	Targets     []*Target `json:"Targets"`   // 目标
 }
 
 type ProbeManager struct {
@@ -229,6 +234,7 @@ func (p *ProbeManager) spliteTask(targetIPs []*TargetIP) []*scanner.ScanTargetEn
 				pPort.PortType = scanner.PortType_TCP
 				pPort.State = scanner.PortState_Unknown
 				pPort.NmapSeviceInfo = append(pPort.NmapSeviceInfo, nmap_service_probe.GetNmapServiceNode(int(item))...)
+				pPort.NmapServiceName = pPort.ToNSServiceName()
 				ste.TargetPort = append(ste.TargetPort, pPort)
 			}
 
@@ -266,6 +272,7 @@ func (p *ProbeManager) spliteTask(targetIPs []*TargetIP) []*scanner.ScanTargetEn
 					pPort.PortType = scanner.PortType_TCP
 					pPort.State = scanner.PortState_Unknown
 					pPort.NmapSeviceInfo = append(pPort.NmapSeviceInfo, nmap_service_probe.GetNmapServiceNode(int(item))...)
+					pPort.NmapServiceName = pPort.ToNSServiceName()
 					ste.TargetPort = append(ste.TargetPort, pPort)
 				}
 
@@ -427,5 +434,43 @@ func (p *ProbeManager) PrintResult() {
 
 // 结果输出为json
 func (p *ProbeManager) Result2JSON() (string, error) {
-	return "", nil
+	resultSet := &ResultSet{
+		Targets: make([]*Target, 0),
+	}
+
+	resultSet.StartTime = p.startTime
+	resultSet.EndTime = time.Now()
+	resultSet.PortScanned = append(resultSet.PortScanned, p.Ports...)
+
+	tmpContainer := make(map[string]*Target)
+
+	for _, item := range p.Entities {
+		_, ok := tmpContainer[item.IP.String()]
+		if !ok {
+			tmpContainer[item.IP.String()] = &Target{
+				OpenPorts:     make([]*scanner.Port, 0),
+				FilteredPorts: make([]*scanner.Port, 0),
+				ClosedPorts:   make([]*scanner.Port, 0),
+			}
+
+			tmpContainer[item.IP.String()].IP = item.IP.String()
+			tmpContainer[item.IP.String()].IsUp = item.IsUp
+		}
+		for _, tp := range item.TargetPort {
+			switch tp.State {
+			case scanner.PortState_Open:
+				tmpContainer[item.IP.String()].OpenPorts = append(tmpContainer[item.IP.String()].OpenPorts, tp)
+			case scanner.PortState_Filtered, scanner.PortState_Unknown:
+				tmpContainer[item.IP.String()].FilteredPorts = append(tmpContainer[item.IP.String()].FilteredPorts, tp)
+			case scanner.PortState_Closed:
+				tmpContainer[item.IP.String()].FilteredPorts = append(tmpContainer[item.IP.String()].FilteredPorts, tp)
+			}
+		}
+	}
+
+	for _, item := range tmpContainer {
+		resultSet.Targets = append(resultSet.Targets, item)
+	}
+
+	return common.ToJsonEncodeStruct(resultSet), nil
 }

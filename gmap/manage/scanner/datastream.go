@@ -11,16 +11,17 @@ import (
 
 // 端口扫描参数
 type Port struct {
-	Lock           sync.RWMutex                          `json:"-"`
-	PortType       int                                   `json:"Type"` // 端口类型 PortType_TCP/PortType_UDP
-	SrcPort        uint16                                // 源端口
-	Val            uint16                                `json:"Port"`
-	State          int                                   `json:"State"`
-	NmapSeviceInfo []*nmap_service_probe.NmapServiceNode `json:"-"`
-	SrvInfo        []string                              `json:"services""`
-	IsFinished     bool                                  `json:"-"` // 是否完成端口扫描
-	AttmptNum      int                                   `json:"-"` // 尝试次数，
-	STime          time.Time                             `json:"-"` // 最近一次发送请求时间
+	Lock            sync.RWMutex                          `json:"-"`
+	PortType        int                                   `json:"Type"` // 端口类型 PortType_TCP/PortType_UDP
+	SrcPort         uint16                                `json:"-"`    // 源端口
+	Val             uint16                                `json:"Port"`
+	State           int                                   `json:"State"`
+	NmapSeviceInfo  []*nmap_service_probe.NmapServiceNode `json:"-"`
+	NmapServiceName string                                `json:"servicename"`
+	SrvInfo         []string                              `json:"srvdetail"`
+	IsFinished      bool                                  `json:"-"` // 是否完成端口扫描
+	AttmptNum       int                                   `json:"-"` // 尝试次数，
+	STime           time.Time                             `json:"-"` // 最近一次发送请求时间
 }
 
 func NewPort() *Port {
@@ -113,6 +114,7 @@ type ScanTargetEntity struct {
 	From               string // uid 来自哪个扫描插件
 
 	IP         net.IP                // 指向的IP
+	IsUp       bool                  // 是否
 	TargetPort []*Port               // 扫描目标端口信息
 	Nexthops   []*device.NexthopInfo // 下一跳信息
 	Timeout    time.Duration         // 设置扫描超时时间（秒)
