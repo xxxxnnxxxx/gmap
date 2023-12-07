@@ -6,9 +6,10 @@ import (
 	"golang.org/x/net/ipv6"
 	"net"
 	"os"
+	"time"
 )
 
-func DetectActive(dstIP string) (bool, error) {
+func PingTest(dstIP string) (bool, error) {
 	// 目标地址
 	targetAddr, err := net.ResolveIPAddr("ip4", dstIP)
 	bIPv6 := false
@@ -24,12 +25,12 @@ func DetectActive(dstIP string) (bool, error) {
 	// 创建 ICMP Socket
 	var conn *icmp.PacketConn
 	if bIPv6 {
-		conn, err = icmp.ListenPacket("ip4:icmp", "0.0.0.0")
+		conn, err = icmp.ListenPacket("ip6:ipv6-icmp", "::")
 		if err != nil {
 			return false, err
 		}
 	} else {
-		conn, err = icmp.ListenPacket("ip6:ipv6-icmp", "::")
+		conn, err = icmp.ListenPacket("ip4:icmp", "0.0.0.0")
 		if err != nil {
 			return false, err
 		}
@@ -41,7 +42,7 @@ func DetectActive(dstIP string) (bool, error) {
 	var echoRequest icmp.Message
 	if bIPv6 {
 		echoRequest = icmp.Message{
-			Type: ipv4.ICMPTypeEcho,
+			Type: ipv6.ICMPTypeEchoReply,
 			Code: 0,
 			Body: &icmp.Echo{
 				ID:   os.Getpid() & 0xffff,
@@ -51,7 +52,7 @@ func DetectActive(dstIP string) (bool, error) {
 		}
 	} else {
 		echoRequest = icmp.Message{
-			Type: ipv6.ICMPTypeEchoReply,
+			Type: ipv4.ICMPTypeEcho,
 			Code: 0,
 			Body: &icmp.Echo{
 				ID:   os.Getpid() & 0xffff,
@@ -73,8 +74,13 @@ func DetectActive(dstIP string) (bool, error) {
 		return false, err
 	}
 
+	timeout := time.Now().Add(1 * time.Second)
+	if err = conn.SetReadDeadline(timeout); err != nil {
+		return false, err
+	}
+
 	// 接收 ICMP Echo Reply
-	replyBuffer := make([]byte, 1500)
+	replyBuffer := make([]byte, 15000)
 	_, _, err = conn.ReadFrom(replyBuffer)
 	if err != nil {
 		return false, err
@@ -104,7 +110,12 @@ func DetectActive(dstIP string) (bool, error) {
 	*/
 
 	switch reply.Type {
-	case ipv4.ICMPTypeDestinationUnreachable, ipv4.ICMPTypeRouterAdvertisement, ipv4.ICMPTypeRedirect:
+	case ipv4.ICMPTypeDestinationUnreachable,
+		ipv4.ICMPTypeRouterAdvertisement,
+		ipv4.ICMPTypeRedirect,
+		ipv6.ICMPTypeRedirect,
+		ipv6.ICMPTypeDestinationUnreachable,
+		ipv6.ICMPTypeRouterAdvertisement:
 		return false, nil
 	default:
 		return true, nil
