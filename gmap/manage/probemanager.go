@@ -51,6 +51,8 @@ type ProbeManager struct {
 	IsSrvDetective bool     // 服务探测库，目前只有nmap
 	Ports          []uint16 // 端口列表
 	Entities       []*scanner.ScanTargetEntity
+	IsPingTest     bool // 是否ping测试, 默认探活
+	CountOfHostup  int  // 在线主机个数
 
 	MaxLevel      int                // 最大层级
 	MaxTaskPool   int                // 最大任务个数
@@ -81,6 +83,7 @@ func NewProbeManager() *ProbeManager {
 		MaxTaskPool: 0, // 默认的最大的任务分割为10
 		ResultSet:   common.NewStack(),
 		Scanners:    make(map[int][]scanner.IScanner),
+		IsPingTest:  true,
 	}
 }
 
@@ -178,7 +181,6 @@ func (p *ProbeManager) Initialize(IPs []net.IP) error {
 			if k == 1 {
 				scanner.PutDataSet(p.Entities)
 			}
-
 		}
 	}
 
@@ -200,6 +202,16 @@ func (p *ProbeManager) IPtoTargetIP(IPs []net.IP) ([]*TargetIP, error) {
 	result := make([]*TargetIP, 0)
 	for _, ip := range IPs {
 		targetIP := NewTargetIP()
+		if p.IsPingTest {
+			bPT, _ := scanner.PingTest(ip.String())
+			if bPT {
+				targetIP.IsUp = true
+				p.CountOfHostup++
+			} else {
+				targetIP.IsUp = false
+			}
+		}
+
 		if p.ScanType == scanner.ScanType_Syn {
 			np, err := device.GetInterfaceNameAndNextHopMac(ip)
 			if err != nil {
@@ -225,6 +237,7 @@ func (p *ProbeManager) spliteTask(targetIPs []*TargetIP) []*scanner.ScanTargetEn
 			ste.CurrentLevel = 1
 			// 初始化扫描实体的IP和下一跳地址
 			ste.IP = append(ste.IP, targetIP.IP...)
+			ste.IsUp = targetIP.IsUp
 			ste.Nexthops = append(ste.Nexthops, targetIP.Nexthops...)
 			ste.PortScanType = p.ScanType
 			ste.NumOfAttempts = p.NumOfAttempts
@@ -259,6 +272,7 @@ func (p *ProbeManager) spliteTask(targetIPs []*TargetIP) []*scanner.ScanTargetEn
 				ste.CurrentLevel = 1
 				// 初始化扫描实体的IP和下一跳地址
 				ste.IP = append(ste.IP, targetIP.IP...)
+				ste.IsUp = targetIP.IsUp
 				ste.Nexthops = append(ste.Nexthops, targetIP.Nexthops...)
 				ste.NumOfAttempts = p.NumOfAttempts
 				ste.PortScanType = p.ScanType
@@ -427,7 +441,7 @@ func (p *ProbeManager) PrintResult() {
 
 	end := fmt.Sprintf("\nGmap done: %v IP address (%v host up) scanned in %v seconds",
 		len(sets),
-		len(sets),
+		p.CountOfHostup,
 		time.Now().Sub(p.startTime).Seconds())
 
 	fmt.Println(end)
