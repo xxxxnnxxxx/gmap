@@ -192,7 +192,7 @@ func (p *PortScan) worker(param interface{}) {
 	ste, ok := param.(*ScanTargetEntity)
 	if ok {
 		if ste.CurrentLevel&p.level > 0 && ste.Nexthops != nil {
-			info := fmt.Sprintf("port scanning: %v", ste.IP.String())
+			info := fmt.Sprintf("portscanner is scanning: %v", ste.IP.String())
 			log.Logger.Info(info)
 			var waitSubTask sync.WaitGroup
 			waitSubTask.Add(1)
@@ -207,7 +207,7 @@ func (p *PortScan) worker(param interface{}) {
 			}(&waitSubTask)
 
 			waitSubTask.Wait()
-			info = fmt.Sprintf("port end: %v", ste.IP.String())
+			info = fmt.Sprintf("portscanner is end: %v", ste.IP.String())
 			log.Logger.Info(info)
 		}
 

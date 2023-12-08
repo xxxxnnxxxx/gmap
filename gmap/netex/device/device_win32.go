@@ -95,6 +95,37 @@ func DeviceGlobalInit() error {
 	return nil
 }
 
+func GetLoopbackRouteInfo(dstIP net.IP) (*RouteInfoNode, error) {
+	if Global_InterfacesInfo == nil ||
+		Global_RouteInfoTable == nil ||
+		Global_ArpTable == nil {
+		return nil, errors.New("not initialize Global Variables")
+	}
+	for _, route := range Global_RouteInfoTable {
+		ip := dstIP.To4()
+		if ip != nil {
+			if route.II == nil {
+				continue
+			}
+			if route.Loopback && route.II.Family == 2 {
+				return route, nil
+			}
+		} else {
+			ip6 := dstIP.To16()
+			if ip6 != nil {
+				if route.II == nil {
+					continue
+				}
+				if route.Loopback && route.II.Family == 23 {
+					return route, nil
+				}
+			}
+		}
+	}
+
+	return nil, errors.New("not found loopback ")
+}
+
 func GetNexthopByIPandInterface(dstIP net.IP, ii *InterfaceInfo) ([]*NexthopInfo, error) {
 	if Global_InterfacesInfo == nil ||
 		Global_RouteInfoTable == nil ||
@@ -104,35 +135,34 @@ func GetNexthopByIPandInterface(dstIP net.IP, ii *InterfaceInfo) ([]*NexthopInfo
 
 	result := make([]*NexthopInfo, 0) // 记录下一跳信息
 
-	// Loopback地址
-	if dstIP.String() == "127.0.0.1" {
-		np := &NexthopInfo{
-			IsLoopback: true,
-		}
-		result = append(result, np)
-
-		return result, nil
-	}
 	// 判断是否为IPv4
 	bIPv4 := true
 	if dstIP.To4() == nil {
 		bIPv4 = false
 	}
 
-	// 是否发现相同子域的路由信息
-	var samesubmainroute *RouteInfoNode
-	// 判断是否能找到同样的IP
-	for _, item := range Global_RouteInfoTable {
-		if item.DestAddr.String() == dstIP.String() {
-			samesubmainroute = item
-			// 如果是在路由表中找到相同的IP,基本确定回环，直接给本机发消息
+	// Loopback地址
+	if bIPv4 {
+		if dstIP.String() == "127.0.0.1" {
+			//np := &NexthopInfo{
+			//	IsLoopback: true,
+			//}
+			//result = append(result, np)
+			//
+			//return result, nil
+			for _, item := range Global_RouteInfoTable {
+				if item.DestAddr.String() == dstIP.String() {
 
-			for _, addr := range samesubmainroute.II.Addrs {
-				if addr.IP.String() == dstIP.String() {
+					var err error
+					routeinfo, err := GetLoopbackRouteInfo(dstIP)
+					if err != nil {
+						return nil, errors.New("not found route information")
+					}
+
 					np := NewNexthopInfo()
 					np.IP = dstIP
-					np.MAC = append(np.MAC, samesubmainroute.II.MAC...)
-					np.Route = samesubmainroute
+					np.MAC = append(np.MAC, routeinfo.II.MAC...)
+					np.Route = routeinfo
 					np.IsDirection = true
 					np.IsLoopback = true
 
@@ -140,8 +170,34 @@ func GetNexthopByIPandInterface(dstIP net.IP, ii *InterfaceInfo) ([]*NexthopInfo
 					return result, nil
 				}
 			}
+		}
+	} else { // IPv6 暂时不支持
 
-			break
+	}
+
+	// 是否发现相同子域的路由信息
+	var samesubmainroute *RouteInfoNode
+	// 判断是否能找到同样的IP
+	// 当网络接口的地址和指定IP相同的时候，说明是本地网卡地址，那么就是回环地址
+	for _, item := range Global_RouteInfoTable {
+		if item.II.Addrs[0].IP.String() == dstIP.String() {
+			// 如果是在路由表中找到相同的IP,基本确定回环，直接给本机发消息
+			// 如果是本地地址，那么就直接返回回环的路由信息
+			var err error
+			samesubmainroute, err = GetLoopbackRouteInfo(dstIP)
+			if err != nil {
+				return nil, errors.New("not found route information")
+			}
+
+			np := NewNexthopInfo()
+			np.IP = dstIP
+			np.MAC = append(np.MAC, samesubmainroute.II.MAC...)
+			np.Route = samesubmainroute
+			np.IsDirection = true
+			np.IsLoopback = true
+
+			result = append(result, np)
+			return result, nil
 		}
 	}
 	if samesubmainroute == nil {

@@ -93,6 +93,11 @@ func NewSimplePacketProcessor2(socketType int,
 		ResultCallback: resultCallback,
 	}
 
+	// 回环的情况下，目的地址和源地址一样
+	if entity.IsLoopback {
+		instance.sourceIP = entity.IP
+	}
+
 	// 指向实体
 	instance.scanEntity = entity
 
@@ -146,7 +151,7 @@ func (p *SimplePacketProcessor) HandleProcess() error {
 	p.Wg.Add(1)
 	go func(wg *sync.WaitGroup) {
 		defer wg.Done()
-		packetSource := gopacket.NewPacketSource(p.handle, layers.LayerTypeEthernet)
+		packetSource := gopacket.NewPacketSource(p.handle, p.handle.LinkType()) // layers.LayerTypeEthernet
 		packetSource.Lazy = true
 		packetSource.NoCopy = false
 		packetSource.DecodeStreamsAsDatagrams = true
@@ -341,7 +346,9 @@ func (p *SimplePacketProcessor) GenerateTCPPackage(srcIP net.IP,
 
 		buf := gopacket.NewSerializeBuffer()
 		if p.scanEntity.Nexthops[0].IsLoopback {
-			err := gopacket.SerializeLayers(buf, opts, ethernet, ipv4)
+			loopbackLayer := &layers.Loopback{}
+			loopbackLayer.Family = layers.ProtocolFamilyIPv4
+			err := gopacket.SerializeLayers(buf, opts, loopbackLayer, ipv4, tcp)
 			if err != nil {
 				return nil, err
 			}
@@ -400,7 +407,7 @@ func (p *SimplePacketProcessor) GenerateTCPPackage(srcIP net.IP,
 		buf := gopacket.NewSerializeBuffer()
 		if p.scanEntity.Nexthops[0].IsLoopback {
 			loopbackLayer := &layers.Loopback{}
-			loopbackLayer.Family = 23
+			loopbackLayer.Family = layers.ProtocolFamilyIPv6Linux
 			err := gopacket.SerializeLayers(buf, opts, loopbackLayer, ipv6, tcp)
 			if err != nil {
 				return nil, err

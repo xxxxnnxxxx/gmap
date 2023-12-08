@@ -20,9 +20,10 @@ import (
 )
 
 type IPEntity struct {
-	IP       net.IP `json:"ip"`
-	IsUp     bool   `json:"isup"` // 是否活跃
-	Nexthops []*device.NexthopInfo
+	IP         net.IP                `json:"ip"`
+	IsUp       bool                  `json:"isup"` // 是否活跃
+	IsLoopback bool                  `json:"-"`    // 是否回环
+	Nexthops   []*device.NexthopInfo `json:"-"`
 	// 保存扫描后的结果
 	OpenPorts     []*scanner.Port `json:"open-ports"`     // 开放端口
 	FilteredPorts []*scanner.Port `json:"filtered-ports"` // 过滤端口
@@ -35,6 +36,7 @@ func NewIPEntity() *IPEntity {
 		OpenPorts:     make([]*scanner.Port, 0),
 		FilteredPorts: make([]*scanner.Port, 0),
 		ClosedPorts:   make([]*scanner.Port, 0),
+		IsLoopback:    false,
 	}
 }
 
@@ -203,6 +205,7 @@ func (p *ProbeManager) IPtoTargetIP(IPs []net.IP) ([]*IPEntity, error) {
 	}
 	beginTime := time.Now()
 	result := make([]*IPEntity, 0)
+	canbeScanned := 0 // 记录可以扫描的IP地址
 	for _, ip := range IPs {
 		targetIP := NewIPEntity()
 		if p.IsPingTest {
@@ -221,14 +224,18 @@ func (p *ProbeManager) IPtoTargetIP(IPs []net.IP) ([]*IPEntity, error) {
 			if err != nil {
 				targetIP.Nexthops = nil
 			} else {
+				canbeScanned++
 				targetIP.Nexthops = append(targetIP.Nexthops, np...)
+				targetIP.IsLoopback = np[0].IsLoopback
 			}
 		}
 
 		targetIP.IP = ip
 		result = append(result, targetIP)
 	}
-	info := fmt.Sprintf("探活和arp地址解析时间：%v seconds", time.Now().Sub(beginTime).Seconds())
+	info := fmt.Sprintf("探活和arp地址解析时间：%v 秒", time.Now().Sub(beginTime).Seconds())
+	log.Logger.Info(info)
+	info = fmt.Sprintf("共发现 %v 个ip地址可以探测到", canbeScanned)
 	log.Logger.Info(info)
 
 	return result, nil
@@ -253,6 +260,7 @@ func (p *ProbeManager) spliteTask(ipe []*IPEntity) []*scanner.ScanTargetEntity {
 			ste.Nexthops = append(ste.Nexthops, targetIP.Nexthops...)
 			ste.PortScanType = p.ScanType
 			ste.NumOfAttempts = p.NumOfAttempts
+			ste.IsLoopback = targetIP.IsLoopback
 			for _, item := range p.Ports {
 				pPort := scanner.NewPort()
 				pPort.SrcPort = srcPort
@@ -288,6 +296,7 @@ func (p *ProbeManager) spliteTask(ipe []*IPEntity) []*scanner.ScanTargetEntity {
 				ste.Nexthops = append(ste.Nexthops, targetIP.Nexthops...)
 				ste.NumOfAttempts = p.NumOfAttempts
 				ste.PortScanType = p.ScanType
+				ste.IsLoopback = targetIP.IsLoopback
 				if len(p.Ports) < endPoint {
 					endPoint = len(p.Ports)
 				}
@@ -412,19 +421,26 @@ func (p *ProbeManager) PrintBanner() {
 
 func (p *ProbeManager) PrintResult() {
 	sets := make(map[string][]*scanner.Port)
+	hostups := make(map[string]bool)
 	for _, entity := range p.ScanEntities {
 		for _, item := range entity.TargetPort {
 			_, ok := sets[entity.IP.String()]
 			if !ok {
 				sets[entity.IP.String()] = make([]*scanner.Port, 0)
 			}
-
+			hostups[entity.IP.String()] = entity.IsUp
 			sets[entity.IP.String()] = append(sets[entity.IP.String()], item)
 		}
 	}
 	for k, v := range sets {
 		fmt.Println("---------------------------------------")
-		top := fmt.Sprintf(": %-20v", k)
+		var activeinfo string
+		if hostups[k] {
+			activeinfo = "up"
+		} else {
+			activeinfo = "down"
+		}
+		top := fmt.Sprintf(": %-20v(%v)", k, activeinfo)
 		fmt.Println(top)
 		header := fmt.Sprintf("%-15v %-10v %-20v", "PROT", "STATE", "SERVICE")
 		fmt.Println(header)

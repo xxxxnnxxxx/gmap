@@ -378,8 +378,8 @@ func PrintInterfaceInfo() {
 	}
 	for _, intf := range Global_InterfacesInfo {
 		fmt.Println("------------------------------------")
-		info := fmt.Sprintf("接口名称：%-30v\nIP地址：%-30v\r\nMac地址：%-30v\r\n接口索引：%-30v\r\n接口类型：%-30v",
-			intf.DevName, intf.ToStringAddrs(), intf.MACString(), intf.IfIndex, intf.IfType)
+		info := fmt.Sprintf("接口名称：%-30v\nIP地址：%-30v\r\nMac地址：%-30v\r\n连接地址：%-30v\n接口索引：%-30v\r\n接口类型：%-30v",
+			intf.DevName, intf.ToStringAddrs(), intf.MACString(), intf.DevLinkSymbol, intf.IfIndex, intf.IfType)
 		fmt.Println(info)
 	}
 

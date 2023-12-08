@@ -115,6 +115,7 @@ type ScanTargetEntity struct {
 
 	IP         net.IP                // 指向的IP
 	IsUp       bool                  // 是否
+	IsLoopback bool                  // 是否回环
 	TargetPort []*Port               // 扫描目标端口信息
 	Nexthops   []*device.NexthopInfo // 下一跳信息
 	Timeout    time.Duration         // 设置扫描超时时间（秒)
@@ -129,6 +130,7 @@ func NewScanTargetEntity() *ScanTargetEntity {
 		TargetPort:    make([]*Port, 0),
 		Timeout:       2,
 		NumOfAttempts: 2,
+		IsLoopback:    false,
 	}
 }
 
