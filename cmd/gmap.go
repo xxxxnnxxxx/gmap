@@ -78,7 +78,7 @@ func main() {
 	//	probeManager.ScanType = scanner.ScanType_UDP
 	//}
 
-	if sS && sT == false {
+	if sS == false && sT == false {
 		log.Logger.Error("请选择一个扫描类型(SYN/TCP connect)")
 		os.Exit(1)
 	}
