@@ -41,10 +41,11 @@ func NewIPEntity() *IPEntity {
 }
 
 type ResultSet struct {
-	StartTime   time.Time   `json:"StartTime"` // 启动时间
-	EndTime     time.Time   `json:"EndTime"`   // 结束时间
-	PortScanned []uint16    `json:"ports"`     // 被扫描的端口，扫描参数
-	Targets     []*IPEntity `json:"Targets"`   // 目标
+	StartTime      time.Time   `json:"StartTime"` // 启动时间
+	EndTime        time.Time   `json:"EndTime"`   // 结束时间
+	ArgumentTarget string      `json:"ips"`       // 扫描的IP列表
+	ArgumentPorts  string      `json:"ports"`     // 被扫描的端口，扫描参数
+	Targets        []*IPEntity `json:"Targets"`   // 目标
 }
 
 type ProbeManager struct {
@@ -76,6 +77,11 @@ type ProbeManager struct {
 	startTime time.Time // 启动时间
 	//
 	OutputPath string // 输出路径
+
+	// 附带参数
+	// 目的是为最后生成文件保留基本信息
+	ArgumentPorts  string // 端口参数
+	ArgumentTarget string // IP参数
 }
 
 func NewProbeManager() *ProbeManager {
@@ -88,6 +94,8 @@ func NewProbeManager() *ProbeManager {
 		IsPingTest:    true,
 		NumOfAttempts: 2, // 默认值
 		Timeout:       2,
+		IPEntites:     make([]*IPEntity, 0),
+		ScanEntities:  make([]*scanner.ScanTargetEntity, 0),
 	}
 }
 
@@ -204,7 +212,7 @@ func (p *ProbeManager) IPtoTargetIP(IPs []net.IP) ([]*IPEntity, error) {
 		return nil, errors.New("")
 	}
 	beginTime := time.Now()
-	result := make([]*IPEntity, 0)
+	// result := make([]*IPEntity, 0)
 	canbeScanned := 0 // 记录可以扫描的IP地址
 	for _, ip := range IPs {
 		targetIP := NewIPEntity()
@@ -231,14 +239,14 @@ func (p *ProbeManager) IPtoTargetIP(IPs []net.IP) ([]*IPEntity, error) {
 		}
 
 		targetIP.IP = ip
-		result = append(result, targetIP)
+		p.IPEntites = append(p.IPEntites, targetIP)
 	}
 	info := fmt.Sprintf("探活和arp地址解析时间：%v 秒", time.Now().Sub(beginTime).Seconds())
 	log.Logger.Info(info)
 	info = fmt.Sprintf("共发现 %v 个ip地址可以探测到", canbeScanned)
 	log.Logger.Info(info)
 
-	return result, nil
+	return p.IPEntites, nil
 }
 
 // 分割任务
@@ -483,7 +491,8 @@ func (p *ProbeManager) Result2JSON() (string, error) {
 
 	resultSet.StartTime = p.startTime
 	resultSet.EndTime = time.Now()
-	resultSet.PortScanned = append(resultSet.PortScanned, p.Ports...)
+	resultSet.ArgumentPorts = p.ArgumentPorts
+	resultSet.ArgumentTarget = p.ArgumentTarget
 
 	tmpContainer := make(map[string]*IPEntity)
 
@@ -506,7 +515,7 @@ func (p *ProbeManager) Result2JSON() (string, error) {
 			case scanner.PortState_Filtered, scanner.PortState_Unknown:
 				tmpContainer[item.IP.String()].FilteredPorts = append(tmpContainer[item.IP.String()].FilteredPorts, tp)
 			case scanner.PortState_Closed:
-				tmpContainer[item.IP.String()].FilteredPorts = append(tmpContainer[item.IP.String()].FilteredPorts, tp)
+				//tmpContainer[item.IP.String()].FilteredPorts = append(tmpContainer[item.IP.String()].FilteredPorts, tp)
 			}
 		}
 	}

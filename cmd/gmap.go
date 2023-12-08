@@ -61,6 +61,10 @@ func main() {
 		os.Exit(1)
 	}
 
+	// 保存端口和目标的参数
+	probeManager.ArgumentTarget = target
+	probeManager.ArgumentPorts = szport
+
 	probeManager.PrintBanner()
 
 	// 超时时间
