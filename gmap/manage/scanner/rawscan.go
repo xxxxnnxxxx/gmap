@@ -235,7 +235,7 @@ func (p *SimplePacketProcessor) HandleProcess() error {
 							pCurrentPort.Leave()
 						} else {
 							pCurrentPort.Entry()
-							pCurrentPort.State = PortState_Ignored
+							pCurrentPort.State = PortState_Unknown
 							pCurrentPort.IsFinished = true
 							pCurrentPort.Leave()
 						}

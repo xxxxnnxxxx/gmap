@@ -3,6 +3,7 @@ package scanner
 import (
 	"Gmap/gmap/functions/nmap_service_probe"
 	"Gmap/gmap/netex/device"
+	"fmt"
 	"net"
 	"strconv"
 	"sync"
@@ -84,6 +85,8 @@ func (p *Port) ToStateString() string {
 		return "Filtered"
 	}
 
+	info := fmt.Sprintf("port:%v, state:%v", p.Val, p.State)
+	fmt.Println(info)
 	return "Unknown"
 }
 
