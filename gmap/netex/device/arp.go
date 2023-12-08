@@ -1,7 +1,6 @@
 package device
 
 import (
-	"Gmap/gmap/common"
 	"errors"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
@@ -16,6 +15,7 @@ waitTime: 等待的秒数
 */
 func SendARPIPv4(dstIP net.IP, ifindex uint32, waitTime int) ([]byte, error) {
 
+	receivedChannel := make(chan struct{})
 	// 通过原IP找到原
 	var intf *InterfaceInfo
 	intf = GetInterfaceInfoByIndex(ifindex)
@@ -46,8 +46,9 @@ func SendARPIPv4(dstIP net.IP, ifindex uint32, waitTime int) ([]byte, error) {
 			if arpLayer != nil {
 				arp, _ := arpLayer.(*layers.ARP)
 				if arp.Operation == layers.ARPReply && net.IP(arp.DstProtAddress).Equal(sourceIP) {
-					bGetMAC = true
 					dstMAC = append(dstMAC, arp.SourceHwAddress...)
+					bGetMAC = true
+					receivedChannel <- struct{}{}
 					break
 				}
 			}
@@ -81,21 +82,22 @@ func SendARPIPv4(dstIP net.IP, ifindex uint32, waitTime int) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	for i := 0; i < 5; i++ {
+	if waitTime == 0 {
+		waitTime = 300
+	}
+loop:
+	for i := 0; i < 2; i++ {
 		err = SendBuf(handle, buffer.Bytes())
 		if err != nil {
 			return nil, err
 		}
-		time.Sleep(1 * time.Second)
-		if bGetMAC {
-			break
+
+		select {
+		case <-receivedChannel:
+			break loop
+		case <-time.After(time.Duration(waitTime) * time.Millisecond):
+			continue
 		}
-	}
-	if waitTime == 0 {
-		waitTime = 5
-	}
-	if !bGetMAC {
-		common.WaitTimeout(&waitPacket, time.Duration(waitTime)*time.Second)
 	}
 
 	if bGetMAC {

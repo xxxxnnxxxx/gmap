@@ -19,38 +19,38 @@ import (
 	"time"
 )
 
-type TargetIP struct {
-	IP       net.IP
-	IsUp     bool // 是否活跃
+type IPEntity struct {
+	IP       net.IP `json:"ip"`
+	IsUp     bool   `json:"isup"` // 是否活跃
 	Nexthops []*device.NexthopInfo
-}
-
-func NewTargetIP() *TargetIP {
-	return &TargetIP{
-		Nexthops: make([]*device.NexthopInfo, 0),
-	}
-}
-
-type Target struct {
-	IP            string          `json:"ip"`             // IP地址
-	IsUp          bool            `json:"isup"`           // 是否在线
+	// 保存扫描后的结果
 	OpenPorts     []*scanner.Port `json:"open-ports"`     // 开放端口
 	FilteredPorts []*scanner.Port `json:"filtered-ports"` // 过滤端口
 	ClosedPorts   []*scanner.Port `json:"closed-ports"`   // 关闭端口
 }
 
+func NewIPEntity() *IPEntity {
+	return &IPEntity{
+		Nexthops:      make([]*device.NexthopInfo, 0),
+		OpenPorts:     make([]*scanner.Port, 0),
+		FilteredPorts: make([]*scanner.Port, 0),
+		ClosedPorts:   make([]*scanner.Port, 0),
+	}
+}
+
 type ResultSet struct {
-	StartTime   time.Time `json:"StartTime"` // 启动时间
-	EndTime     time.Time `json:"EndTime"`   // 结束时间
-	PortScanned []uint16  `json:"ports"`     // 被扫描的端口，扫描参数
-	Targets     []*Target `json:"Targets"`   // 目标
+	StartTime   time.Time   `json:"StartTime"` // 启动时间
+	EndTime     time.Time   `json:"EndTime"`   // 结束时间
+	PortScanned []uint16    `json:"ports"`     // 被扫描的端口，扫描参数
+	Targets     []*IPEntity `json:"Targets"`   // 目标
 }
 
 type ProbeManager struct {
-	ScanType       int      // 端口扫描类型
-	IsSrvDetective bool     // 服务探测库，目前只有nmap
-	Ports          []uint16 // 端口列表
-	Entities       []*scanner.ScanTargetEntity
+	ScanType       int         // 端口扫描类型
+	IsSrvDetective bool        // 服务探测库，目前只有nmap
+	Ports          []uint16    // 端口列表
+	IPEntites      []*IPEntity // 目标IP
+	ScanEntities   []*scanner.ScanTargetEntity
 	IsPingTest     bool // 是否ping测试, 默认探活
 	CountOfHostup  int  // 在线主机个数
 
@@ -171,8 +171,8 @@ func (p *ProbeManager) Initialize(IPs []net.IP) error {
 	p.NotifyChannel = make(chan *scanner.ScannerMSG, p.GetCountOfScanners())
 	// 填充参数
 	// 每个IP作为一单元进行分配
-	p.Entities = append(p.Entities, p.spliteTask(tps)...)
-	countOfTasks := len(p.Entities)
+	p.ScanEntities = append(p.ScanEntities, p.spliteTask(tps)...)
+	countOfTasks := len(p.ScanEntities)
 
 	for k, v := range p.Scanners {
 		for _, scanner := range v {
@@ -181,7 +181,7 @@ func (p *ProbeManager) Initialize(IPs []net.IP) error {
 			scanner.SetCountOfTasks(countOfTasks)
 			// 把数压入第一个层级的数据参数执行栈中
 			if k == 1 {
-				scanner.PutDataSet(p.Entities)
+				scanner.PutDataSet(p.ScanEntities)
 			}
 		}
 	}
@@ -197,13 +197,14 @@ func (p *ProbeManager) Initialize(IPs []net.IP) error {
 	return nil
 }
 
-func (p *ProbeManager) IPtoTargetIP(IPs []net.IP) ([]*TargetIP, error) {
+func (p *ProbeManager) IPtoTargetIP(IPs []net.IP) ([]*IPEntity, error) {
 	if len(IPs) == 0 {
 		return nil, errors.New("")
 	}
-	result := make([]*TargetIP, 0)
+	beginTime := time.Now()
+	result := make([]*IPEntity, 0)
 	for _, ip := range IPs {
-		targetIP := NewTargetIP()
+		targetIP := NewIPEntity()
 		if p.IsPingTest {
 			bPT, _ := scanner.PingTest(ip.String())
 			if bPT {
@@ -218,23 +219,31 @@ func (p *ProbeManager) IPtoTargetIP(IPs []net.IP) ([]*TargetIP, error) {
 			// np, err := device.GetNexthopByIP(ip)
 			np, err := device.GetNexthopByIPandInterface(ip, p.II)
 			if err != nil {
-				continue
+				targetIP.Nexthops = nil
+			} else {
+				targetIP.Nexthops = append(targetIP.Nexthops, np...)
 			}
-			targetIP.Nexthops = append(targetIP.Nexthops, np...)
 		}
 
 		targetIP.IP = ip
 		result = append(result, targetIP)
 	}
+	info := fmt.Sprintf("探活和arp地址解析时间：%v seconds", time.Now().Sub(beginTime).Seconds())
+	log.Logger.Info(info)
 
 	return result, nil
 }
 
 // 分割任务
-func (p *ProbeManager) spliteTask(targetIPs []*TargetIP) []*scanner.ScanTargetEntity {
+func (p *ProbeManager) spliteTask(ipe []*IPEntity) []*scanner.ScanTargetEntity {
 	result := make([]*scanner.ScanTargetEntity, 0)
 	srcPort := uint16(rawsock.GeneratePort())
-	for _, targetIP := range targetIPs {
+	for _, targetIP := range ipe {
+		// 不存在下一掉信息的情况下
+		// 直接略过
+		if targetIP.Nexthops == nil {
+			continue
+		}
 		if p.ScanType == scanner.ScanType_Syn {
 			ste := scanner.NewScanTargetEntity()
 			ste.CurrentLevel = 1
@@ -328,18 +337,18 @@ func (p *ProbeManager) Do() {
 	for k, _ := range p.Scanners {
 		for _, scanner := range p.Scanners[k] {
 			p.WgWorker.Add(1)
-			go func() {
+			go func(wait *sync.WaitGroup) {
 				err := scanner.Ready()
 				if err != nil {
 					log.Logger.Error(scanner.GetScannerName(), err)
-					p.WgWorker.Done()
 					return
 				}
-				err = scanner.Run(&p.WgWorker)
+				err = scanner.Run(wait)
 				if err != nil {
 					log.Logger.Error(err)
+					return
 				}
-			}()
+			}(&p.WgWorker)
 
 		}
 	}
@@ -403,7 +412,7 @@ func (p *ProbeManager) PrintBanner() {
 
 func (p *ProbeManager) PrintResult() {
 	sets := make(map[string][]*scanner.Port)
-	for _, entity := range p.Entities {
+	for _, entity := range p.ScanEntities {
 		for _, item := range entity.TargetPort {
 			_, ok := sets[entity.IP.String()]
 			if !ok {
@@ -453,25 +462,25 @@ func (p *ProbeManager) PrintResult() {
 // 结果输出为json
 func (p *ProbeManager) Result2JSON() (string, error) {
 	resultSet := &ResultSet{
-		Targets: make([]*Target, 0),
+		Targets: make([]*IPEntity, 0),
 	}
 
 	resultSet.StartTime = p.startTime
 	resultSet.EndTime = time.Now()
 	resultSet.PortScanned = append(resultSet.PortScanned, p.Ports...)
 
-	tmpContainer := make(map[string]*Target)
+	tmpContainer := make(map[string]*IPEntity)
 
-	for _, item := range p.Entities {
+	for _, item := range p.ScanEntities {
 		_, ok := tmpContainer[item.IP.String()]
 		if !ok {
-			tmpContainer[item.IP.String()] = &Target{
+			tmpContainer[item.IP.String()] = &IPEntity{
 				OpenPorts:     make([]*scanner.Port, 0),
 				FilteredPorts: make([]*scanner.Port, 0),
 				ClosedPorts:   make([]*scanner.Port, 0),
 			}
 
-			tmpContainer[item.IP.String()].IP = item.IP.String()
+			tmpContainer[item.IP.String()].IP = item.IP
 			tmpContainer[item.IP.String()].IsUp = item.IsUp
 		}
 		for _, tp := range item.TargetPort {

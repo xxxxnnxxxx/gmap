@@ -4,6 +4,7 @@ import (
 	"Gmap/gmap/common"
 	"Gmap/gmap/log"
 	"errors"
+	"fmt"
 	"github.com/panjf2000/ants/v2"
 	"sync"
 	"time"
@@ -32,7 +33,7 @@ type PortScan struct {
 func NewPortScanner() *PortScan {
 	return &PortScan{
 		taskStack:   common.NewStack(),
-		maxTaskPool: 10, // 默认值
+		maxTaskPool: 50, // 默认值
 		state:       0,  // 0 表示不在运行
 	}
 }
@@ -190,7 +191,9 @@ func (p *PortScan) GetScannerName() string {
 func (p *PortScan) worker(param interface{}) {
 	ste, ok := param.(*ScanTargetEntity)
 	if ok {
-		if ste.CurrentLevel&p.level > 0 {
+		if ste.CurrentLevel&p.level > 0 && ste.Nexthops != nil {
+			info := fmt.Sprintf("port scanning: %v", ste.IP.String())
+			log.Logger.Info(info)
 			var waitSubTask sync.WaitGroup
 			waitSubTask.Add(1)
 			go func(waits *sync.WaitGroup) {
@@ -204,6 +207,8 @@ func (p *PortScan) worker(param interface{}) {
 			}(&waitSubTask)
 
 			waitSubTask.Wait()
+			info = fmt.Sprintf("port end: %v", ste.IP.String())
+			log.Logger.Info(info)
 		}
 
 	}

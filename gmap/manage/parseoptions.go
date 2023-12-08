@@ -1,5 +1,6 @@
 package manage
 
+// from nmap
 type Option struct {
 	Name   string
 	HasArg int

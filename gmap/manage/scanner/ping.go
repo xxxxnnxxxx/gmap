@@ -74,13 +74,13 @@ func PingTest(dstIP string) (bool, error) {
 		return false, err
 	}
 
-	timeout := time.Now().Add(1 * time.Second)
+	timeout := time.Now().Add(300 * time.Millisecond)
 	if err = conn.SetReadDeadline(timeout); err != nil {
 		return false, err
 	}
 
 	// 接收 ICMP Echo Reply
-	replyBuffer := make([]byte, 15000)
+	replyBuffer := make([]byte, 1500)
 	_, _, err = conn.ReadFrom(replyBuffer)
 	if err != nil {
 		return false, err

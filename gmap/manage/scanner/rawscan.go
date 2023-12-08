@@ -521,6 +521,7 @@ func (p *SimplePacketProcessor) splitePortlistForSend() [][]*Port {
 	return result
 }
 
+// 对端口扫描只扫描两次
 func (p *SimplePacketProcessor) Do() error {
 	if len(p.portList) == 0 {
 		return errors.New("not found scanned ports")
@@ -536,8 +537,11 @@ func (p *SimplePacketProcessor) Do() error {
 		//}
 		countofSended := 0
 		var srcPort uint16 = 0
-		if count > 0 {
+		if count == 1 {
 			srcPort = uint16(rawsock.GeneratePort())
+		} else if count > 1 {
+			p.Close()
+			break
 		}
 		// 记录发送时间
 		for _, port := range p.portList {
@@ -556,8 +560,8 @@ func (p *SimplePacketProcessor) Do() error {
 			break
 		}
 
-		count++
 		//
+		beginTime := time.Now()
 		for {
 			var latestTime time.Time
 			p.lock_latestTime.Lock()
@@ -566,14 +570,17 @@ func (p *SimplePacketProcessor) Do() error {
 
 			if latestTime.IsZero() {
 				time.Sleep(2 * time.Millisecond)
+				if time.Now().Sub(beginTime).Milliseconds() > 1000 {
+					break
+				}
 				continue
 			}
 
 			if time.Now().Sub(latestTime).Milliseconds() > 1000 {
-				if count > 1 {
+				if count == 1 {
 					p.Close()
 					return nil
-				} else if count == 1 {
+				} else if count == 0 {
 					break
 				}
 			} else { // 小于时间
@@ -586,6 +593,7 @@ func (p *SimplePacketProcessor) Do() error {
 				}
 			}
 		}
+		count++
 	}
 
 	return nil
