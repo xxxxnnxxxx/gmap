@@ -68,7 +68,7 @@ type ProbeManager struct {
 	// performance
 	cpucorecount int // cpu核心数量
 	//
-	Ifindex uint32                // interface index
+	Ifindex int                   // interface index
 	II      *device.InterfaceInfo // 接口信息
 	//
 	startTime time.Time // 启动时间
@@ -78,12 +78,14 @@ type ProbeManager struct {
 
 func NewProbeManager() *ProbeManager {
 	return &ProbeManager{
-		ScanType:    scanner.ScanType_TCPConn,
-		Ports:       make([]uint16, 0),
-		MaxTaskPool: 0, // 默认的最大的任务分割为10
-		ResultSet:   common.NewStack(),
-		Scanners:    make(map[int][]scanner.IScanner),
-		IsPingTest:  true,
+		ScanType:      scanner.ScanType_TCPConn,
+		Ports:         make([]uint16, 0),
+		MaxTaskPool:   0, // 默认的最大的任务分割为10
+		ResultSet:     common.NewStack(),
+		Scanners:      make(map[int][]scanner.IScanner),
+		IsPingTest:    true,
+		NumOfAttempts: 2, // 默认值
+		Timeout:       2,
 	}
 }
 
@@ -123,8 +125,8 @@ func (p *ProbeManager) Initialize(IPs []net.IP) error {
 		device.DeviceGlobalInit()
 	}
 	// 根据指定的网络接口索引，接口信息结构
-	if p.Ifindex != 0 {
-		p.II = device.GetInterfaceInfoByIndex(p.Ifindex)
+	if p.Ifindex > 0 {
+		p.II = device.GetInterfaceInfoByIndex(uint32(p.Ifindex))
 	}
 
 	//
