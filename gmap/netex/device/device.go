@@ -233,7 +233,7 @@ func (p *RouteInfoNode) NetMaskAddr() netip.Addr {
 
 		ip := fmt.Sprintf("%v.%v.%v.%v", b[3], b[2], b[1], b[0])
 
-		result, _ := netip.ParseAddr(ip)
+		result, _ = netip.ParseAddr(ip)
 
 		return result
 	}
@@ -471,6 +471,28 @@ func GetOutboundRouteInfo() ([]*RouteInfoNode, error) {
 				result = append(result, route)
 			} else if route.Family == 23 && route.DestAddr == netip.IPv6Unspecified() {
 				result = append(result, route)
+			}
+		}
+	} else {
+		return result, errors.New("Global_RouteInfoTable is empty")
+	}
+
+	return result, nil
+}
+
+// 通过指定接口，获取出网路由信息
+func GetOutboundRouteInfoByII(ii *InterfaceInfo) ([]*RouteInfoNode, error) {
+	result := make([]*RouteInfoNode, 0)
+	if Global_RouteInfoTable != nil {
+		for _, route := range Global_RouteInfoTable {
+			if route.Family == 2 && route.DestAddr == netip.IPv4Unspecified() {
+				if ii.MACString() == route.II.MACString() {
+					result = append(result, route)
+				}
+			} else if route.Family == 23 && route.DestAddr == netip.IPv6Unspecified() {
+				if ii.MACString() == route.II.MACString() {
+					result = append(result, route)
+				}
 			}
 		}
 	} else {

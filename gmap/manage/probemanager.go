@@ -213,7 +213,8 @@ func (p *ProbeManager) IPtoTargetIP(IPs []net.IP) ([]*TargetIP, error) {
 		}
 
 		if p.ScanType == scanner.ScanType_Syn {
-			np, err := device.GetInterfaceNameAndNextHopMac(ip)
+			// np, err := device.GetNexthopByIP(ip)
+			np, err := device.GetNexthopByIPandInterface(ip, p.II)
 			if err != nil {
 				continue
 			}
