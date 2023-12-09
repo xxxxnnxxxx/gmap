@@ -12,9 +12,10 @@ import (
 	"sync"
 )
 
+// 探测协议
 const (
-	PN_TCP int = 1
-	PN_UDP int = 2
+	ProbeProtocol_TCP int = 1
+	ProbeProtocol_UDP int = 2
 )
 
 type Exclude struct {
@@ -72,6 +73,7 @@ type NmapServiceProbeNode struct {
 	Protocol    int    // 协议
 	Probename   string // 探测名称
 	Probestring string // 探测字符串
+	Method      *ProbeMethod
 
 	Tcpwrappedms int //
 	Totalwaitms  int
@@ -101,14 +103,15 @@ func (p *NmapServiceProbeNode) Analyze(script string) error {
 	// protocol
 	switch rules[0] {
 	case "TCP":
-		p.Protocol = PN_TCP
+		p.Protocol = ProbeProtocol_TCP
 	case "UDP":
-		p.Protocol = PN_UDP
+		p.Protocol = ProbeProtocol_UDP
 	default:
 		return errors.New("probe script error")
 	}
 	// probename
 	p.Probename = rules[1]
+	p.Method = GetProbeMethod(p.Probename)
 	// probestring
 	var begin = 2
 	var end = 0
@@ -295,15 +298,19 @@ func NewVersionInfo() *VersionInfo {
 type NmapServiceProbe struct {
 	DataPath string
 	// data
-	ExcludeInfo  *Exclude
-	ProbeNodes   []*NmapServiceProbeNode
-	currentProbe *NmapServiceProbeNode
+	ExcludeInfo     *Exclude
+	ProbeNodes      []*NmapServiceProbeNode
+	PortsToNodes    map[uint16]([]*NmapServiceProbeNode)
+	SSLPortsToNodes map[uint16]([]*NmapServiceProbeNode)
+	currentProbe    *NmapServiceProbeNode
 }
 
 func NewNmapServiceProbe() *NmapServiceProbe {
 	return &NmapServiceProbe{
-		ExcludeInfo: NewExclude(),
-		ProbeNodes:  make([]*NmapServiceProbeNode, 0),
+		ExcludeInfo:     NewExclude(),
+		ProbeNodes:      make([]*NmapServiceProbeNode, 0),
+		PortsToNodes:    make(map[uint16][]*NmapServiceProbeNode),
+		SSLPortsToNodes: make(map[uint16][]*NmapServiceProbeNode),
 	}
 }
 
@@ -470,4 +477,29 @@ loop:
 	}
 	wg.Wait()
 	return 0, nil
+}
+
+func (p *NmapServiceProbe) ArrangeProbeNodes() error {
+	if len(p.ProbeNodes) == 0 {
+		return errors.New("probenodes is empty")
+	}
+	for _, item := range p.ProbeNodes {
+		for _, port := range item.Ports {
+			_, ok := p.PortsToNodes[port]
+			if !ok {
+				p.PortsToNodes[port] = make([]*NmapServiceProbeNode, 0)
+			}
+			p.PortsToNodes[port] = append(p.PortsToNodes[port], item)
+		}
+
+		for _, port := range item.SSLPorts {
+			_, ok := p.SSLPortsToNodes[port]
+			if !ok {
+				p.SSLPortsToNodes[port] = make([]*NmapServiceProbeNode, 0)
+			}
+			p.SSLPortsToNodes[port] = append(p.SSLPortsToNodes[port], item)
+		}
+	}
+
+	return nil
 }

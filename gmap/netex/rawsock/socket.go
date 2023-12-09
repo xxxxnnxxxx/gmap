@@ -4,7 +4,6 @@ import (
 	"Gmap/gmap/common"
 	"Gmap/gmap/log"
 	"Gmap/gmap/netex/device"
-	device2 "Gmap/gmap/netex/device"
 	"encoding/binary"
 	"errors"
 	"github.com/google/gopacket"
@@ -463,7 +462,7 @@ func (p *ProtocolObject) Initialize(deviceLnkName string) error {
 
 	p.DeviceHandle = handle
 
-	localIP, localMac, err := device2.GetOutboundIPandMac()
+	localIP, localMac, err := device.GetOutboundIPandMac()
 	if err != nil {
 		return err
 	}
@@ -476,7 +475,7 @@ func (p *ProtocolObject) Initialize(deviceLnkName string) error {
 		p.LocalIP = localIP
 	}
 
-	_, gwMac, err := device2.GetGatewayIPandMac(handle)
+	_, gwMac, err := device.GetGatewayIPandMac(handle)
 	if err != nil {
 		return err
 	}
@@ -523,7 +522,7 @@ func (p *ProtocolObject) CloseDevice() error {
 	if p.DeviceHandle == nil {
 		return errors.New("the handle is nil")
 	}
-	device2.ClosePcapHandle(p.DeviceHandle)
+	device.ClosePcapHandle(p.DeviceHandle)
 	if p.Done != nil {
 		p.Done <- struct{}{}
 	}
@@ -797,7 +796,7 @@ func (p *ProtocolObject) SendSyn(acceptSock *Socket, payload []byte) error {
 		return err
 	}
 
-	device2.SendBuf(p.DeviceHandle, sendBuf)
+	device.SendBuf(p.DeviceHandle, sendBuf)
 	return nil
 }
 
@@ -859,7 +858,7 @@ func (p *ProtocolObject) SendSynAck(acceptSock *Socket, payload []byte) error {
 		return err
 	}
 
-	device2.SendBuf(p.DeviceHandle, sendBuf)
+	device.SendBuf(p.DeviceHandle, sendBuf)
 
 	return nil
 }
@@ -911,7 +910,7 @@ func (p *ProtocolObject) SendAck(acceptSock *Socket, payload []byte) error {
 		return err
 	}
 
-	device2.SendBuf(p.DeviceHandle, sendBuf)
+	device.SendBuf(p.DeviceHandle, sendBuf)
 	return nil
 }
 
@@ -957,7 +956,7 @@ func (p *ProtocolObject) SendPshAck(acceptSock *Socket, payload []byte) error {
 		return err
 	}
 
-	device2.SendBuf(p.DeviceHandle, sendBuf)
+	device.SendBuf(p.DeviceHandle, sendBuf)
 	return nil
 }
 
@@ -1009,7 +1008,7 @@ func (p *ProtocolObject) SendFinAck(acceptSock *Socket, payload []byte) error {
 	} else if acceptSock.TCPStatus == TCP_ESTABLISHED {
 		acceptSock.TCPStatus = TCP_FIN_WAIT1
 	}
-	device2.SendBuf(p.DeviceHandle, sendBuf)
+	device.SendBuf(p.DeviceHandle, sendBuf)
 	return nil
 }
 

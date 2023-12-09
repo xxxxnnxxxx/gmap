@@ -12,7 +12,7 @@ import (
 
 func main() {
 	var target string
-	//var isSrvDetection bool
+	var isSrvProbe bool
 	var szport string
 	var sS, sT bool
 	// var timeout float64
@@ -25,7 +25,7 @@ func main() {
 	flag.BoolVar(&sS, "sS", false, "SYN扫描")
 	flag.BoolVar(&sT, "sT", false, "TCP连接扫描")
 	flag.BoolVar(&isPingtestNo, "Pn", false, "禁止ping探活")
-	// flag.BoolVar(&isSrvDetection, "sV", false, "服务探测")
+	flag.BoolVar(&isSrvProbe, "sV", false, "服务探测")
 	flag.StringVar(&szport, "p", "", "指定扫描端口列表")
 	flag.StringVar(&target, "t", "", "输入扫描目标, 格式: 192.168.1.1/24 or 192.168.1.1,192.168.1.2 or 192.168.1.1")
 	// flag.Float64Var(&timeout, "to", 2, "超时时间（秒）")
@@ -87,9 +87,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	//if isSrvDetection {
-	//	probeManager.IsSrvDetective = isSrvDetection
-	//}
+	// 加载服务探测
+	if isSrvProbe {
+		probeManager.IsSrvProbe = isSrvProbe
+	}
 
 	// 输出路径
 	if len(outputpath) > 0 {

@@ -5,6 +5,7 @@ import (
 	"Gmap/gmap/functions/nmap_service_probe"
 	"Gmap/gmap/log"
 	"Gmap/gmap/manage/scanner"
+	"Gmap/gmap/manage/scanner/srvprobe"
 	"Gmap/gmap/netex/device"
 	"Gmap/gmap/netex/rawsock"
 	"errors"
@@ -49,13 +50,13 @@ type ResultSet struct {
 }
 
 type ProbeManager struct {
-	ScanType       int         // 端口扫描类型
-	IsSrvDetective bool        // 服务探测库，目前只有nmap
-	Ports          []uint16    // 端口列表
-	IPEntites      []*IPEntity // 目标IP
-	ScanEntities   []*scanner.ScanTargetEntity
-	IsPingTest     bool // 是否ping测试, 默认探活
-	CountOfHostup  int  // 在线主机个数
+	ScanType      int         // 端口扫描类型
+	IsSrvProbe    bool        // 服务探测库，目前只有nmap
+	Ports         []uint16    // 端口列表
+	IPEntites     []*IPEntity // 目标IP
+	ScanEntities  []*scanner.ScanTargetEntity
+	IsPingTest    bool // 是否ping测试, 默认探活
+	CountOfHostup int  // 在线主机个数
 
 	MaxLevel      int                // 最大层级
 	MaxTaskPool   int                // 最大任务个数
@@ -164,9 +165,9 @@ func (p *ProbeManager) Initialize(IPs []net.IP) error {
 		p.Scanners[p.MaxLevel] = append(p.Scanners[p.MaxLevel], scanner)
 	}
 	// 服务探测
-	if p.IsSrvDetective {
+	if p.IsSrvProbe {
 		p.MaxLevel = p.MaxLevel + 1
-		scanner := scanner.NewSrvDetectiveScan()
+		scanner := srvprobe.NewSrvDetectiveScan()
 		scanner.SetLevel(p.MaxLevel)
 		scanner.SetUID(common.GenerateUniqueStr())
 		scanner.SetProcCallback(p.Distibition)
