@@ -110,6 +110,15 @@ func (p *Port) ToNSServiceName() string {
 	return srvname
 }
 
+func (p *Port) ToVersionInfo() string {
+	var result string
+	for _, item := range p.SrvInfo {
+		result += item
+	}
+
+	return result
+}
+
 type ScanTargetEntity struct {
 	CurrentLevel       int    // 当前level
 	CurrentScannerType int    // 当前的扫描类型

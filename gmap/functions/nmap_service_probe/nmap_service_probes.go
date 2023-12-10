@@ -4,6 +4,7 @@ import (
 	"Gmap/gmap/common"
 	"bufio"
 	"errors"
+	"github.com/dlclark/regexp2"
 	log "github.com/sirupsen/logrus"
 	"io"
 	"os"
@@ -14,8 +15,8 @@ import (
 
 // 探测协议
 const (
-	ProbeProtocol_TCP int = 1
-	ProbeProtocol_UDP int = 2
+	ProbeProtocol_TCP int = 0
+	ProbeProtocol_UDP int = 1
 )
 
 type Exclude struct {
@@ -77,7 +78,7 @@ type NmapServiceProbeNode struct {
 
 	Tcpwrappedms int //
 	Totalwaitms  int
-	Rarity       int8     // 稀有性
+	Rarity       int8     // 稀有度指令大致对应于该探测器返回有用结果的频率。
 	Ports        []uint16 // 端口
 	SSLPorts     []uint16
 
@@ -141,6 +142,29 @@ func (p *NmapServiceProbeNode) Analyze(script string) error {
 	return nil
 }
 
+// 匹配信息
+func (p *NmapServiceProbeNode) Match(content string) ([]string, error) {
+
+	result := make([]string, 0)
+	for _, item := range p.Matchs {
+		bMatch, ms, bSoftmatch, err := item.Match(content)
+		if err != nil {
+			return nil, err
+		}
+
+		if bMatch {
+			result = append(result, ms...)
+			if bSoftmatch {
+				continue
+			} else {
+				break
+			}
+		}
+	}
+
+	return result, nil
+}
+
 // fallback
 type Fallback struct {
 	Cmdlines []string // 命令行
@@ -176,6 +200,53 @@ func NewMatchMethod(issoftmatch bool) *MatchMethod {
 		IsSoftMatch:  issoftmatch,
 		VersionInfos: make([]*VersionInfo, 0),
 	}
+}
+
+// 返回值：
+// 是否匹配成功，匹配到的数据， 是否软匹配，返回错误
+func (p *MatchMethod) Match(content string) (bool, []string, bool, error) {
+	var pattern string
+	if p.IsIgnoreCase {
+		pattern = `(?i)` + p.Pattern
+	} else {
+		pattern = p.Pattern
+	}
+
+	reg1, err := regexp2.Compile(pattern, 0)
+	if err != nil {
+		return false, nil, p.IsSoftMatch, err
+	}
+	result := make([]string, 0)
+	match, err := reg1.FindStringMatch(content)
+	if err != nil {
+		return false, nil, p.IsSoftMatch, err
+	}
+
+	if match == nil {
+		return false, nil, p.IsSoftMatch, nil
+	}
+
+	versioninfo := ""
+	for _, item := range p.VersionInfos {
+		switch item.InfoType {
+		case 'p':
+			versioninfo += item.Description + " "
+		case 'v':
+			pos, err := strconv.Atoi(item.Description[1:])
+			if err != nil {
+				continue
+			}
+
+			// 获取匹配组
+			gps := match.Groups()
+			versioninfo += gps[pos].Captures[0].String()
+		}
+	}
+	if len(versioninfo) == 0 {
+		return false, nil, p.IsSoftMatch, nil
+	}
+	result = append(result, versioninfo)
+	return true, result, p.IsSoftMatch, nil
 }
 
 func (p *MatchMethod) Analyze(script string) error {

@@ -451,7 +451,12 @@ func (p *ProbeManager) PrintResult() {
 		}
 		top := fmt.Sprintf(": %-20v(%v)", k, activeinfo)
 		fmt.Println(top)
-		header := fmt.Sprintf("%-15v %-10v %-20v", "PROT", "STATE", "SERVICE")
+		var header string
+		if p.IsSrvProbe {
+			header = fmt.Sprintf("%-15v %-10v %-10v %-20v", "PROT", "STATE", "SERVICE", "VERSION")
+		} else {
+			header = fmt.Sprintf("%-15v %-10v %-10v", "PROT", "STATE", "SERVICE")
+		}
 		fmt.Println(header)
 		var countofClosed int
 		var countofFiltered int
@@ -464,10 +469,19 @@ func (p *ProbeManager) PrintResult() {
 				continue
 			}
 			var info string
-			info = fmt.Sprintf("%-15v %-10v %-20v",
-				item.ToPortValString()+"/"+item.ToPortTypeString(),
-				item.ToStateString(),
-				item.ToNSServiceName())
+			if p.IsSrvProbe {
+				info = fmt.Sprintf("%-15v %-10v %-10v %-20v",
+					item.ToPortValString()+"/"+item.ToPortTypeString(),
+					item.ToStateString(),
+					item.ToNSServiceName(),
+					item.ToVersionInfo())
+			} else {
+				info = fmt.Sprintf("%-15v %-10v %-10v",
+					item.ToPortValString()+"/"+item.ToPortTypeString(),
+					item.ToStateString(),
+					item.ToNSServiceName())
+			}
+
 			fmt.Println(info)
 		}
 

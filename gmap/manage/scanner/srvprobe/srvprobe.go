@@ -7,6 +7,7 @@ import (
 	"Gmap/gmap/manage/scanner"
 	"errors"
 	"github.com/panjf2000/ants/v2"
+	"net"
 	"path"
 	"sync"
 	"time"
@@ -199,9 +200,8 @@ func (p *SrvDetectiveScan) worker(param interface{}) {
 			waitSubTask.Add(1)
 			go func(waits *sync.WaitGroup) {
 				defer waits.Done()
-
 				// TODO: 在这个地方探测各种相关的服务内容
-				log.Logger.Info("detetive service")
+				p.detectiveService(ste)
 
 			}(&waitSubTask)
 
@@ -225,18 +225,22 @@ func (p *SrvDetectiveScan) createTaskPool() error {
 
 // 记载nmap 服务探测库
 func (p *SrvDetectiveScan) loadNmapServiceProbeLib() error {
-	nsp := nmap_service_probe.NewNmapServiceProbe()
 	currentDir, err := common.GetCurrentDir()
 	if err != nil {
 		return err
 	}
-	_, err = nsp.LoadNmapServiceProbes(path.Join(currentDir, "data", "nmap-service-probes"))
+	_, err = p.nsp.LoadNmapServiceProbes(path.Join(currentDir, "data", "nmap-service-probes"))
 	if err != nil {
 		return err
 	}
 
+	//format := "func ProbeFunc_%v(pn *NmapServiceProbeNode, protocol int, host string, port uint16) ([]string, error) {\n\tfmt.Println(\"ProbeFunc_%v\")\n\treturn nil, nil\n}"
+	//for _, item := range nsp.ProbeNodes {
+	//	info := fmt.Sprintf(format, strings.Replace(item.Probename, "-", "_", -1), strings.Replace(item.Probename, "-", "_", -1))
+	//	fmt.Println(info)
+	//}
 	// 整理所有的端口和节点对应
-	nsp.ArrangeProbeNodes()
+	p.nsp.ArrangeProbeNodes()
 	return nil
 }
 
@@ -251,5 +255,55 @@ func (p *SrvDetectiveScan) detectiveService(entity *scanner.ScanTargetEntity) er
 	}
 
 	// 根据端口和协议，获取所有的
+	var wait sync.WaitGroup
+
+	for _, item := range portsOpened {
+		wait.Add(1)
+		go p.srvprobeHandle(&wait, entity.IP, item)
+	}
+
+	wait.Wait()
+	return nil
+}
+
+func (p *SrvDetectiveScan) srvprobeHandle(wait *sync.WaitGroup, ip net.IP, port *scanner.Port) error {
+	if port == nil || wait == nil {
+		return errors.New("port is empty")
+	}
+
+	defer wait.Done()
+	_, ok := p.nsp.PortsToNodes[port.Val]
+	if ok {
+		for _, item := range p.nsp.PortsToNodes[port.Val] {
+			srvinfo, err := item.Method.Method(item, port.PortType, false, ip.String(), port.Val)
+			if err == nil {
+				if len(srvinfo) > 0 {
+					port.Lock.Lock()
+					port.SrvInfo = append(port.SrvInfo, srvinfo...)
+					port.Lock.Unlock()
+					break
+				} else {
+					continue
+				}
+			}
+		}
+	}
+
+	_, ok = p.nsp.SSLPortsToNodes[port.Val]
+	if ok {
+		for _, item := range p.nsp.SSLPortsToNodes[port.Val] {
+			srvinfo, err := item.Method.Method(item, port.PortType, false, ip.String(), port.Val)
+			if err == nil {
+				if len(srvinfo) > 0 {
+					port.Lock.Lock()
+					port.SrvInfo = append(port.SrvInfo, srvinfo...)
+					port.Lock.Unlock()
+				} else {
+					continue
+				}
+			}
+		}
+	}
+
 	return nil
 }

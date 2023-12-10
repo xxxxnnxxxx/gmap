@@ -405,7 +405,7 @@ func (p *HttpEntity) Send(buf []byte) error {
 	p.dialer.SetTlsFlag(p.IsTls)
 	p.dialer.SetCacheSize(20000)
 	p.dialer.Dial(false)
-	p.dialer.StartRecv()
+	p.dialer.Listen()
 	p.dialer.Send(buf)
 	p.dialer.Wait()
 	return nil

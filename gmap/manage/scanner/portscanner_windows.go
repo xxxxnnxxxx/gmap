@@ -33,15 +33,14 @@ func TCPConnectProbe(entity *ScanTargetEntity) int {
 			var timeout time.Duration
 			timeout = entity.Timeout
 			btcp := sock.NewBaseDialer(sock.ProtocolType_TCP, false)
-			btcp.HandleData = func(data []byte, n int) error {
+			btcp.HandleData = func(data []byte, n int) {
 				fmt.Println(string(data))
-				return nil
 			}
 			btcp.SetIP(entity.IP.String())
 			btcp.SetPort(pPort.Val)
 			times = entity.NumOfAttempts // 尝试次数
 		begin:
-			btcp.SetConnTimeout(float64(timeout))
+			btcp.SetConnTimeout(int64(timeout))
 			err := btcp.Dial(true)
 			if err != nil {
 				var s *net.OpError

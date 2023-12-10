@@ -1,11 +1,11 @@
 package sock
 
 import (
-	"Gmap/gmap/log"
 	"crypto/tls"
 	"errors"
 	"io"
 	"net"
+	"os"
 	"strconv"
 	"time"
 )
@@ -24,12 +24,16 @@ type BaseDialer struct {
 	Port         uint16
 	Conn         net.Conn
 	TlsConn      *tls.Conn
-	HandleData   func([]byte, int) error // 接收数据回调
-	Signal       chan int                // 信号
-	StateError   chan error
-	ConnTimeout  time.Duration
-	ReadTimeout  time.Duration
-	CacheSize    int // 接收数据的缓存大小
+	// 数据返回回调
+	// 参数
+	// 传递的数据
+	// 返回结果类型
+	HandleData  func([]byte, int) //
+	Signal      chan int          // 信号
+	StateError  chan error
+	ConnTimeout time.Duration
+	ReadTimeout time.Duration
+	CacheSize   int // 接收数据的缓存大小
 }
 
 const (
@@ -50,13 +54,13 @@ func NewBaseDialer(protocoltype int, isTLS bool) *BaseDialer {
 	}
 }
 
-func (p *BaseDialer) SetConnTimeout(seconds float64) {
-	p.ConnTimeout = time.Duration(seconds * float64(time.Second))
+func (p *BaseDialer) SetConnTimeout(msecond int64) {
+	p.ConnTimeout = time.Duration(msecond) * time.Millisecond
 	p.Dialer.Timeout = p.ConnTimeout
 }
 
-func (p *BaseDialer) SetReadTimeout(seconds float64) {
-	p.ReadTimeout = time.Duration(seconds * float64(time.Second))
+func (p *BaseDialer) SetReadTimeout(msecond int64) {
+	p.ReadTimeout = time.Duration(msecond) * time.Millisecond
 }
 
 func (p *BaseDialer) SetIP(ip string) error {
@@ -152,7 +156,7 @@ func (p *BaseDialer) Close() {
 	}
 }
 
-func (p *BaseDialer) StartRecv() error {
+func (p *BaseDialer) Listen() error {
 	if p.Conn == nil {
 		return errors.New("don't connect a server")
 	}
@@ -218,14 +222,29 @@ func (p *BaseDialer) StartRecv() error {
 	return nil
 }
 
-func (p *BaseDialer) Wait() {
+// golang的错误处理返回详细信息简直是垃圾
+func (p *BaseDialer) Wait() error {
+	var err error
 	select {
 	case val := <-p.Signal:
 		switch val {
 		case Signal_RecvFinished:
-			log.Logger.Info("RecvFinished")
+			return errors.New("RecvFinished")
 		}
-	case err := <-p.StateError:
-		log.Logger.Error(err)
+	case err = <-p.StateError:
+		var opErr *net.OpError
+		if errors.As(err, &opErr) {
+			// 进一步检查具体的错误类型
+			var syscallError *os.SyscallError
+			var DNSError *net.DNSError
+			switch {
+			case errors.As(opErr.Err, &syscallError), errors.As(opErr.Err, &DNSError):
+				break
+			default:
+				err = nil
+			}
+		}
 	}
+
+	return err
 }

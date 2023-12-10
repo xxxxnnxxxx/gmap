@@ -185,7 +185,7 @@ const (
 
 type ProbeMethod struct {
 	ProbeName string // 探针名称
-	Method    func(node *NmapServiceProbeNode, protocol int, host string, port uint16) ([]string, error)
+	Method    func(node *NmapServiceProbeNode, protocol int, isTLS bool, host string, port uint16) ([]string, error)
 }
 
 func NewProbeMethod() *ProbeMethod {
