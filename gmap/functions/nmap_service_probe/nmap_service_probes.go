@@ -3,6 +3,7 @@ package nmap_service_probe
 import (
 	"Gmap/gmap/common"
 	"bufio"
+	"encoding/hex"
 	"errors"
 	"github.com/dlclark/regexp2"
 	log "github.com/sirupsen/logrus"
@@ -11,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // 探测协议
@@ -96,6 +98,67 @@ func NewProbeNode() *NmapServiceProbeNode {
 	}
 }
 
+// 字符串转码
+func (p *NmapServiceProbeNode) stringUnescape(escape string) string {
+	result := make([]byte, 0)
+	i := 0
+	for {
+		if i >= len(escape) {
+			break
+		}
+
+		if escape[i] == '\\' {
+			i++
+			switch escape[i] {
+			case '0':
+				result = append(result, '\x00')
+				i++
+			case 'a':
+				result = append(result, '\a')
+				i++
+			case 'b':
+				result = append(result, '\b')
+				i++
+			case 'f':
+				result = append(result, '\f')
+				i++
+			case 'n':
+				result = append(result, '\n')
+				i++
+			case 'r':
+				result = append(result, '\r')
+				i++
+			case 't':
+				result = append(result, '\t')
+				i++
+			case 'x':
+				i++
+				if i >= len(escape) || i+1 > len(escape) {
+					return ""
+				}
+				b, err := hex.DecodeString(escape[i : i+2])
+				if err != nil {
+					return ""
+				}
+
+				result = append(result, b...)
+				i += 2
+			default:
+				if escape[i] >= '0' && escape[i] <= '9' {
+					return ""
+				}
+				result = append(result, escape[i])
+				i++
+			}
+		} else {
+			result = append(result, escape[i])
+			i++
+		}
+	}
+
+	return string(result)
+}
+
 func (p *NmapServiceProbeNode) Analyze(script string) error {
 	rules, err := common.Splite_Space(script, 3)
 	if err != nil {
@@ -126,8 +189,10 @@ func (p *NmapServiceProbeNode) Analyze(script string) error {
 				break
 			}
 		}
-		p.Probestring = rules[2][begin:end]
+		p.Probestring = p.stringUnescape(rules[2][begin:end])
 	}
+
+	// 探测字符串需要转码
 
 	// no-payloed
 	if end < len(rules[2]) {
@@ -202,20 +267,46 @@ func NewMatchMethod(issoftmatch bool) *MatchMethod {
 	}
 }
 
+// 得到匹配组
+func (p *MatchMethod) getMatchArray(format string) ([]int, error) {
+	regsz := `\$\d+`
+	reg, err := regexp2.Compile(regsz, 0)
+	if err != nil {
+		return nil, err
+	}
+
+	result := make([]int, 0)
+	match, err := reg.FindStringMatch(format)
+	for match != nil {
+		pos, err := strconv.Atoi(match.String()[1:])
+		if err != nil {
+			continue
+		}
+		result = append(result, pos)
+		match, _ = reg.FindNextMatch(match)
+	}
+
+	return result, nil
+}
+
 // 返回值：
 // 是否匹配成功，匹配到的数据， 是否软匹配，返回错误
 func (p *MatchMethod) Match(content string) (bool, []string, bool, error) {
-	var pattern string
+	var reg1 *regexp2.Regexp
+	var err error
 	if p.IsIgnoreCase {
-		pattern = `(?i)` + p.Pattern
+		reg1, err = regexp2.Compile(p.Pattern, regexp2.IgnoreCase)
+		if err != nil {
+			return false, nil, p.IsSoftMatch, err
+		}
 	} else {
-		pattern = p.Pattern
+		reg1, err = regexp2.Compile(p.Pattern, 0)
+		reg1.MatchTimeout = 200 * time.Millisecond
+		if err != nil {
+			return false, nil, p.IsSoftMatch, err
+		}
 	}
 
-	reg1, err := regexp2.Compile(pattern, 0)
-	if err != nil {
-		return false, nil, p.IsSoftMatch, err
-	}
 	result := make([]string, 0)
 	match, err := reg1.FindStringMatch(content)
 	if err != nil {
@@ -231,15 +322,49 @@ func (p *MatchMethod) Match(content string) (bool, []string, bool, error) {
 		switch item.InfoType {
 		case 'p':
 			versioninfo += item.Description + " "
-		case 'v':
-			pos, err := strconv.Atoi(item.Description[1:])
+		case 'v', 'i', 'd', 'h', 'o':
+			//pos, err := strconv.Atoi(item.Description[1:])
+			//if err != nil {
+			//	continue
+			//}
+			//
+			//// 获取匹配组
+			//gps := match.Groups()
+			//versioninfo += gps[pos].Captures[0].String()
+			regsz := `\$\d+`
+			reg, err := regexp2.Compile(regsz, 0)
 			if err != nil {
 				continue
 			}
+			marray := make([]int, 0)
+			m, err := reg.FindStringMatch(item.Description)
+			if m == nil {
+				versioninfo += item.Description
+				continue
+			}
+			for m != nil {
+				pos, err := strconv.Atoi(m.String()[1:])
+				if err != nil {
+					break
+				}
+				marray = append(marray, pos)
+				m, _ = reg.FindNextMatch(m)
+			}
 
-			// 获取匹配组
 			gps := match.Groups()
-			versioninfo += gps[pos].Captures[0].String()
+			if len(gps) != len(marray)+1 {
+				continue
+			}
+			var ssss string
+			ssss = item.Description
+			for _, pos := range marray {
+				tem, err := reg.Replace(ssss, gps[pos].Captures[0].String(), 0, 1)
+				if err == nil {
+					ssss = tem
+				}
+			}
+
+			versioninfo += ssss
 		}
 	}
 	if len(versioninfo) == 0 {
