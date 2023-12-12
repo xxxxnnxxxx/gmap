@@ -45,11 +45,11 @@ func NewBaseDialer(protocoltype int, isTLS bool) *BaseDialer {
 		ProtocolType: protocoltype,
 		IsTLS:        isTLS,
 		TlsConn:      nil,
-		ConnTimeout:  2 * time.Second,
+		ConnTimeout:  10 * time.Second,
 		ReadTimeout:  10 * time.Second,
 		Dialer:       net.Dialer{},
 		Signal:       make(chan int),
-		StateError:   make(chan error),
+		StateError:   make(chan error, 1000),
 		CacheSize:    10240,
 	}
 }
@@ -109,10 +109,6 @@ func (p *BaseDialer) Dial(bOnlyConnectTest bool) error {
 	if p.ProtocolType == ProtocolType_TCP {
 		// golang 在这个地方是真垃圾
 		p.Conn, err = p.Dialer.Dial("tcp", p.IP.String()+":"+strconv.FormatInt(int64(p.Port), 10))
-		//p.Conn, err = net.DialTCP("tcp", nil, &net.TCPAddr{
-		//	IP:   p.IP,
-		//	Port: int(p.Port),
-		//})
 		if err == nil && !bOnlyConnectTest {
 			if p.ReadTimeout > 0 {
 				p.Conn.SetReadDeadline(time.Now().Add(p.ReadTimeout))
@@ -244,6 +240,35 @@ func (p *BaseDialer) Wait() error {
 				err = nil
 			}
 		}
+	}
+
+	return err
+}
+
+// golang的错误处理返回详细信息简直是垃圾
+func (p *BaseDialer) WaitTimeout(t time.Duration) error {
+	var err error
+	select {
+	case val := <-p.Signal:
+		switch val {
+		case Signal_RecvFinished:
+			return errors.New("RecvFinished")
+		}
+	case err = <-p.StateError:
+		var opErr *net.OpError
+		if errors.As(err, &opErr) {
+			// 进一步检查具体的错误类型
+			var syscallError *os.SyscallError
+			var DNSError *net.DNSError
+			switch {
+			case errors.As(opErr.Err, &syscallError), errors.As(opErr.Err, &DNSError):
+				break
+			default:
+				err = nil
+			}
+		}
+	case <-time.After(t):
+		err = errors.New("timeout")
 	}
 
 	return err

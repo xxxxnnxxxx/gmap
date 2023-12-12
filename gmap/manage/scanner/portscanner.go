@@ -90,8 +90,8 @@ func (p *PortScan) Ready() error {
 
 // 启动
 func (p *PortScan) Run(wg *sync.WaitGroup) error {
-	log.Logger.Info("PortScan is running.")
 	defer wg.Done()
+	log.Logger.Info("PortScan is running.")
 	p.state = ScannerState_Running // 运行状态
 	for {
 		reqTask := p.taskStack.Pop()
@@ -136,7 +136,7 @@ func (p *PortScan) Run(wg *sync.WaitGroup) error {
 				}
 				p.MsgCallback(msg)
 			}
-			return errors.New("the scanner is terminated")
+			return errors.New("the scanner11 is terminated")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -196,8 +196,8 @@ func (p *PortScan) worker(param interface{}) {
 			log.Logger.Info(info)
 			var waitSubTask sync.WaitGroup
 			waitSubTask.Add(1)
-			go func(waits *sync.WaitGroup) {
-				defer waits.Done()
+			go func(wg *sync.WaitGroup) {
+				defer wg.Done()
 				switch ste.PortScanType {
 				case ScanType_TCPConn:
 					p.sendTCPConnectionProbe(ste)
@@ -205,8 +205,8 @@ func (p *PortScan) worker(param interface{}) {
 					p.sendTCPSynProbe(ste)
 				}
 			}(&waitSubTask)
-
 			waitSubTask.Wait()
+			go p.ProcCallback(ste)
 			info = fmt.Sprintf("portscanner is end: %v", ste.IP.String())
 			log.Logger.Info(info)
 		}
@@ -231,10 +231,7 @@ func (p *PortScan) sendTCPConnectionProbe(entity *ScanTargetEntity) {
 	if entity == nil {
 		return
 	}
-
 	TCPConnectProbe(entity)
-
-	go p.ProcCallback(entity)
 }
 
 // TCP SYN扫描
@@ -242,10 +239,7 @@ func (p *PortScan) sendTCPSynProbe(entity *ScanTargetEntity) {
 	if entity == nil {
 		return
 	}
-
 	TCPSynProbe(entity)
-
-	go p.ProcCallback(entity)
 }
 
 func (p *PortScan) sendUDPProbe(entity *ScanTargetEntity) {

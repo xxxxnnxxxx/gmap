@@ -126,7 +126,7 @@ func (p *HttpEntity) defaultReqheader() {
 	p.ReqHeaders[Header_Connection] = Default_Header_Connection_value
 }
 
-func (p *HttpEntity) handleTCPData(buf []byte, length int) error {
+func (p *HttpEntity) handleTCPData(buf []byte, length int) {
 	p.buffer.Write(buf, length)
 	status := atomic.LoadInt32(&p.ResponseRecvStatus)
 	if status == 0 {
@@ -135,7 +135,6 @@ func (p *HttpEntity) handleTCPData(buf []byte, length int) error {
 		go p.analyzeContent()
 	}
 
-	return nil
 }
 
 // 处理banner， 形如 HTTP/1.1 200 OK

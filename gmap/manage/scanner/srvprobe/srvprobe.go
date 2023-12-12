@@ -6,6 +6,7 @@ import (
 	"Gmap/gmap/log"
 	"Gmap/gmap/manage/scanner"
 	"errors"
+	"fmt"
 	"github.com/panjf2000/ants/v2"
 	"net"
 	"path"
@@ -37,7 +38,7 @@ type SrvDetectiveScan struct {
 func NewSrvDetectiveScan() *SrvDetectiveScan {
 	return &SrvDetectiveScan{
 		taskStack:   common.NewStack(),
-		maxTaskPool: 10, // 默认值
+		maxTaskPool: 20, // 默认值
 		state:       0,  // 0 表示不在运行
 		nsp:         nmap_service_probe.NewNmapServiceProbe(),
 	}
@@ -95,8 +96,8 @@ func (p *SrvDetectiveScan) Ready() error {
 }
 
 func (p *SrvDetectiveScan) Run(wg *sync.WaitGroup) error {
-	log.Logger.Info("srvprobe is running.")
 	defer wg.Done()
+	log.Logger.Info("srvprobe is running.")
 	p.state = scanner.ScannerState_Running // 运行状态
 	for {
 		reqTask := p.taskStack.Pop()
@@ -108,20 +109,11 @@ func (p *SrvDetectiveScan) Run(wg *sync.WaitGroup) error {
 		}
 
 		if p.state == scanner.ScannerState_Stop {
-			wgTaskPool := new(sync.WaitGroup)
-			wgTaskPool.Add(1)
-			go func(group *sync.WaitGroup) {
-				defer group.Done()
-				for {
-					if p.taskPool.Running() > 0 {
-						time.Sleep(10 * time.Millisecond)
-					} else {
-						break
-					}
-				}
-			}(wgTaskPool)
-
-			wgTaskPool.Wait()
+			if p.taskPool.Running() > 0 {
+				time.Sleep(10 * time.Millisecond)
+			} else {
+				break
+			}
 		} else if p.state == scanner.ScannerState_Running {
 			if p.taskPool.Running() > 0 { // 这个地方可能存在问题，导致后面没有栈可能暂时没有任务，然后没有处理就已经退出了
 				time.Sleep(10 * time.Millisecond)
@@ -141,6 +133,7 @@ func (p *SrvDetectiveScan) Run(wg *sync.WaitGroup) error {
 				}
 				p.MsgCallback(msg)
 			}
+
 			return errors.New("the scanner is terminated")
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -157,7 +150,7 @@ func (p *SrvDetectiveScan) Run(wg *sync.WaitGroup) error {
 }
 
 func (p *SrvDetectiveScan) Close() {
-	p.state = 0
+	p.state = scanner.ScannerState_Stop
 }
 
 func (p *SrvDetectiveScan) Terminate() {
@@ -196,16 +189,12 @@ func (p *SrvDetectiveScan) worker(param interface{}) {
 	ste, ok := param.(*scanner.ScanTargetEntity)
 	if ok {
 		if ste.CurrentLevel&p.level > 0 {
-			var waitSubTask sync.WaitGroup
-			waitSubTask.Add(1)
-			go func(waits *sync.WaitGroup) {
-				defer waits.Done()
-				// TODO: 在这个地方探测各种相关的服务内容
-				p.detectiveService(ste)
-
-			}(&waitSubTask)
-
-			waitSubTask.Wait()
+			info := fmt.Sprintf("service is probing: %v", ste.IP.String())
+			log.Logger.Info(info)
+			// TODO: 在这个地方探测各种相关的服务内容
+			p.detectiveService(ste)
+			info = fmt.Sprintf("service is end: %v", ste.IP.String())
+			log.Logger.Info(info)
 		}
 
 	}
@@ -234,11 +223,6 @@ func (p *SrvDetectiveScan) loadNmapServiceProbeLib() error {
 		return err
 	}
 
-	//format := "func ProbeFunc_%v(pn *NmapServiceProbeNode, protocol int, host string, port uint16) ([]string, error) {\n\tfmt.Println(\"ProbeFunc_%v\")\n\treturn nil, nil\n}"
-	//for _, item := range nsp.ProbeNodes {
-	//	info := fmt.Sprintf(format, strings.Replace(item.Probename, "-", "_", -1), strings.Replace(item.Probename, "-", "_", -1))
-	//	fmt.Println(info)
-	//}
 	// 整理所有的端口和节点对应
 	p.nsp.ArrangeProbeNodes()
 	return nil
@@ -255,32 +239,29 @@ func (p *SrvDetectiveScan) detectiveService(entity *scanner.ScanTargetEntity) er
 	}
 
 	// 根据端口和协议，获取所有的
-	var wait sync.WaitGroup
-
+	wait := new(sync.WaitGroup)
 	for _, item := range portsOpened {
 		wait.Add(1)
-		go p.srvprobeHandle(&wait, entity.IP, item)
+		pPort := item
+		go p.srvprobeHandle(wait, entity.IP, pPort)
 	}
 
 	wait.Wait()
 	return nil
 }
 
-func (p *SrvDetectiveScan) srvprobeHandle(wait *sync.WaitGroup, ip net.IP, port *scanner.Port) error {
-	if port == nil || wait == nil {
+func (p *SrvDetectiveScan) srvprobeHandle(wg *sync.WaitGroup, ip net.IP, port *scanner.Port) error {
+	defer wg.Done()
+	if port == nil {
 		return errors.New("port is empty")
 	}
-
-	defer wait.Done()
 	_, ok := p.nsp.PortsToNodes[port.Val]
 	if ok {
 		for _, item := range p.nsp.PortsToNodes[port.Val] {
 			srvinfo, err := item.Method.Method(item, port.PortType, false, ip.String(), port.Val)
 			if err == nil {
 				if len(srvinfo) > 0 {
-					port.Lock.Lock()
 					port.SrvInfo = append(port.SrvInfo, srvinfo...)
-					port.Lock.Unlock()
 					break
 				} else {
 					continue
@@ -292,12 +273,11 @@ func (p *SrvDetectiveScan) srvprobeHandle(wait *sync.WaitGroup, ip net.IP, port 
 	_, ok = p.nsp.SSLPortsToNodes[port.Val]
 	if ok {
 		for _, item := range p.nsp.SSLPortsToNodes[port.Val] {
-			srvinfo, err := item.Method.Method(item, port.PortType, false, ip.String(), port.Val)
+			srvinfo, err := item.Method.Method(item, port.PortType, true, ip.String(), port.Val)
 			if err == nil {
 				if len(srvinfo) > 0 {
-					port.Lock.Lock()
 					port.SrvInfo = append(port.SrvInfo, srvinfo...)
-					port.Lock.Unlock()
+					break
 				} else {
 					continue
 				}

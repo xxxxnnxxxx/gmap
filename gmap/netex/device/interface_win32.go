@@ -49,8 +49,6 @@ func GetRouteInfoTable() ([]*RouteInfoNode, error) {
 		rin.GateWayAddr = route.NextHop.Addr()
 		// 掩码
 		rin.NetmaskBits = route.DestinationPrefix.PrefixLength
-		// 是否回环
-		rin.Loopback = route.Loopback
 
 		//
 		interfaceInfo, err := FindIntefaceInfo(rin.Family, route.InterfaceIndex)
@@ -59,6 +57,11 @@ func GetRouteInfoTable() ([]*RouteInfoNode, error) {
 		} else {
 			//
 			rin.II = interfaceInfo
+			// 是否回环
+			if rin.II.IfType == IF_TYPE_SOFTWARE_LOOPBACK {
+				rin.Loopback = true
+			}
+
 		}
 
 		result = append(result, rin)

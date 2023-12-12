@@ -119,6 +119,8 @@ func (p *SimplePacketProcessor) Initialize() error {
 
 	p.handle = handle
 
+	p.Wg.Add(1)
+
 	return nil
 }
 
@@ -148,9 +150,9 @@ func (p *SimplePacketProcessor) HandleProcess() error {
 	if p.handle == nil {
 		return errors.New("please open the device.")
 	}
-	p.Wg.Add(1)
-	go func(wg *sync.WaitGroup) {
-		defer wg.Done()
+	// p.Wg.Add(1)
+	go func() {
+		// defer wg.Done()
 		packetSource := gopacket.NewPacketSource(p.handle, p.handle.LinkType()) // layers.LayerTypeEthernet
 		packetSource.Lazy = true
 		packetSource.NoCopy = false
@@ -276,7 +278,7 @@ func (p *SimplePacketProcessor) HandleProcess() error {
 				return
 			}
 		}
-	}(&p.Wg)
+	}()
 	return nil
 }
 
@@ -530,10 +532,10 @@ func (p *SimplePacketProcessor) splitePortlistForSend() [][]*Port {
 
 // 对端口扫描只扫描两次
 func (p *SimplePacketProcessor) Do() error {
+	defer p.Wg.Done()
 	if len(p.portList) == 0 {
 		return errors.New("not found scanned ports")
 	}
-
 	p.HandleProcess() // 增加监听
 	count := 0
 	for {
@@ -602,7 +604,6 @@ func (p *SimplePacketProcessor) Do() error {
 		}
 		count++
 	}
-
 	return nil
 }
 
