@@ -172,7 +172,7 @@ func (p *BaseDialer) Listen() error {
 				n, err := p.TlsConn.Read(buf)
 				if err != nil {
 					if n > 0 {
-						p.RecvedBuf.Write(buf)
+						p.RecvedBuf.Write(buf[:n])
 						if p.HandleData != nil {
 							if p.IsBlockMode {
 								p.HandleData(buf, n)
@@ -191,8 +191,8 @@ func (p *BaseDialer) Listen() error {
 					return
 				}
 				if n > 0 {
+					p.RecvedBuf.Write(buf[:n])
 					if p.HandleData != nil {
-						p.RecvedBuf.Write(buf)
 						if p.IsBlockMode {
 							p.HandleData(buf, n)
 						} else {
@@ -210,7 +210,7 @@ func (p *BaseDialer) Listen() error {
 				n, err := p.Conn.Read(buf)
 				if err != nil {
 					if n > 0 {
-						p.RecvedBuf.Write(buf)
+						p.RecvedBuf.Write(buf[:n])
 						if p.HandleData != nil {
 							if p.IsBlockMode {
 								p.HandleData(buf, n)
@@ -227,7 +227,7 @@ func (p *BaseDialer) Listen() error {
 					return
 				}
 				if n > 0 {
-					p.RecvedBuf.Write(buf)
+					p.RecvedBuf.Write(buf[:n])
 					if p.HandleData != nil {
 						if p.IsBlockMode {
 							p.HandleData(buf, n)
