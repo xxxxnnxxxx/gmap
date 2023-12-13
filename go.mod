@@ -5,6 +5,7 @@ go 1.20
 require (
 	github.com/3th1nk/cidr v0.2.0
 	github.com/dlclark/regexp2 v1.10.0
+	github.com/felixge/fgprof v0.9.3
 	github.com/google/gopacket v1.1.19
 	github.com/google/uuid v1.3.1
 	github.com/jackpal/gateway v1.0.10
@@ -19,6 +20,7 @@ require (
 )
 
 require (
+	github.com/google/pprof v0.0.0-20211214055906-6f57359322fd // indirect
 	github.com/josharian/native v1.0.0 // indirect
 	github.com/mattn/go-colorable v0.1.13 // indirect
 	github.com/mattn/go-isatty v0.0.16 // indirect

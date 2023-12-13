@@ -13,6 +13,7 @@ import (
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
+	"io"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -38,6 +39,7 @@ type SimplePacketProcessor struct {
 	portList        map[uint16]*Port // 端口列表
 	countOfPortList int32
 	countOfFinished int32 // 保留端口已经结束的个数
+	ScanState       int32 // 是否完成
 	socketType      int
 
 	lock_latestTime sync.RWMutex
@@ -66,6 +68,7 @@ func NewSimplePacketProcessor(socketType int,
 		portList:       make(map[uint16]*Port),
 		ResultCallback: resultCallback,
 		latestTime:     time.Time{},
+		ScanState:      ScannerState_Stop,
 	}
 
 	for _, item := range portList {
@@ -158,125 +161,146 @@ func (p *SimplePacketProcessor) HandleProcess() error {
 		packetSource.NoCopy = false
 		packetSource.DecodeStreamsAsDatagrams = true
 		for {
-			select {
-			case stream := <-packetSource.Packets():
-				// 这个地方stream居然有可能为nil
-				// ？？？？fuck
-				packet := stream
-				if packet == nil {
-					continue
-				}
-				go func() {
-					// 判断是否完成所有的端口扫描
-					count := atomic.LoadInt32(&p.countOfFinished)
-					if count == p.countOfPortList {
-						// 扫描完成直接返回
-						p.Close()
-						return
-					}
-
-					var iplayer gopacket.Layer
-					// var ip net.IPAddr
-					var srcIP net.IP
-					var dstIP net.IP
-					iplayer = packet.Layer(layers.LayerTypeIPv4)
-					if iplayer == nil {
-						iplayer = packet.Layer(layers.LayerTypeIPv6)
-						if iplayer == nil {
-							return
-						}
-						ip, ok := iplayer.(*layers.IPv6)
-						if !ok {
-							return
-						}
-						srcIP = ip.SrcIP
-						dstIP = ip.DstIP
-					} else {
-						ip, ok := iplayer.(*layers.IPv4)
-						if !ok {
-							return
-						}
-						srcIP = ip.SrcIP
-						dstIP = ip.DstIP
-					}
-					// 只直接目的地址为当前IP地址的数据
-					if !(dstIP.Equal(p.sourceIP) && srcIP.Equal(p.dstIP)) {
-						return
-					}
-
-					// 区分协议
-					switch p.socketType {
-					case rawsock.SocketType_STREAM:
-						tcplayer := packet.Layer(layers.LayerTypeTCP)
-						if tcplayer == nil {
-							return
-						}
-
-						tcp, ok := tcplayer.(*layers.TCP)
-						if !ok {
-							return
-						}
-
-						var pCurrentPort *Port
-						pCurrentPort = p.IsContiansPort(uint16(tcp.SrcPort))
-						if pCurrentPort == nil || tcp.DstPort != layers.TCPPort(pCurrentPort.SrcPort) {
-							return
-						}
-
-						atomic.AddInt32(&p.countOfFinished, 1)
-
-						if tcp.SYN && tcp.ACK {
-							pCurrentPort.Entry()
-							pCurrentPort.State = PortState_Open
-							pCurrentPort.IsFinished = true
-							pCurrentPort.Leave()
-						} else if tcp.RST && tcp.ACK {
-							pCurrentPort.Entry()
-							pCurrentPort.State = PortState_Closed
-							pCurrentPort.IsFinished = true
-							pCurrentPort.Leave()
-						} else {
-							pCurrentPort.Entry()
-							pCurrentPort.State = PortState_Unknown
-							pCurrentPort.IsFinished = true
-							pCurrentPort.Leave()
-						}
-
-						// 这个地方也是判断是否完成了所有的端口扫描
-						count = atomic.LoadInt32(&p.countOfFinished)
-						if count == p.countOfPortList {
-							// 扫描完成直接返回
-							p.Close()
-						}
-
-						// 更新时间
-						p.lock_latestTime.Lock()
-						p.latestTime = time.Now()
-						p.lock_latestTime.Unlock()
-
-						if p.ResultCallback != nil {
-							go p.ResultCallback(pCurrentPort)
-						}
-
-					case rawsock.SocketType_DGRAM:
-						udplayer := packet.Layer(layers.LayerTypeUDP)
-						if udplayer == nil {
-							return
-						}
-
-						udp, ok := udplayer.(*layers.UDP)
-						if !ok {
-							return
-						}
-
-						if udp.DstPort != layers.UDPPort(p.sourcePort) {
-							return
-						}
-					}
-				}()
-			case <-p.Done:
+			stream, err := packetSource.NextPacket()
+			if err == io.EOF {
 				return
 			}
+			//select {
+			//case stream := <-packetSource.Packets():
+			// 判断是否完成所有的端口扫描
+			count := atomic.LoadInt32(&p.countOfFinished)
+			if count == p.countOfPortList {
+				return
+			}
+
+			// 判断扫描器状态
+			scanState := atomic.LoadInt32(&p.ScanState)
+			if scanState == ScannerState_Stop || scanState == ScannerState_Terminated {
+				return
+			}
+
+			packet := stream
+			if packet == nil {
+				continue
+			}
+
+			go func() {
+				// 判断是否完成所有的端口扫描
+				count := atomic.LoadInt32(&p.countOfFinished)
+				if count == p.countOfPortList {
+					// 扫描完成直接返回
+					// p.Close()
+					return
+				}
+
+				scanState := atomic.LoadInt32(&p.ScanState)
+				if scanState == ScannerState_Stop || scanState == ScannerState_Terminated {
+					return
+				}
+
+				var iplayer gopacket.Layer
+				// var ip net.IPAddr
+				var srcIP net.IP
+				var dstIP net.IP
+				iplayer = packet.Layer(layers.LayerTypeIPv4)
+				if iplayer == nil {
+					iplayer = packet.Layer(layers.LayerTypeIPv6)
+					if iplayer == nil {
+						return
+					}
+					ip, ok := iplayer.(*layers.IPv6)
+					if !ok {
+						return
+					}
+					srcIP = ip.SrcIP
+					dstIP = ip.DstIP
+				} else {
+					ip, ok := iplayer.(*layers.IPv4)
+					if !ok {
+						return
+					}
+					srcIP = ip.SrcIP
+					dstIP = ip.DstIP
+				}
+				// 只直接目的地址为当前IP地址的数据
+				if !(dstIP.Equal(p.sourceIP) && srcIP.Equal(p.dstIP)) {
+					return
+				}
+
+				// 区分协议
+				switch p.socketType {
+				case rawsock.SocketType_STREAM:
+					tcplayer := packet.Layer(layers.LayerTypeTCP)
+					if tcplayer == nil {
+						return
+					}
+
+					tcp, ok := tcplayer.(*layers.TCP)
+					if !ok {
+						return
+					}
+
+					var pCurrentPort *Port
+					pCurrentPort = p.IsContiansPort(uint16(tcp.SrcPort))
+					if pCurrentPort == nil || tcp.DstPort != layers.TCPPort(pCurrentPort.SrcPort) {
+						return
+					}
+
+					atomic.AddInt32(&p.countOfFinished, 1)
+
+					if tcp.SYN && tcp.ACK {
+						pCurrentPort.Entry()
+						pCurrentPort.State = PortState_Open
+						pCurrentPort.IsFinished = true
+						pCurrentPort.Leave()
+					} else if tcp.RST && tcp.ACK {
+						pCurrentPort.Entry()
+						pCurrentPort.State = PortState_Closed
+						pCurrentPort.IsFinished = true
+						pCurrentPort.Leave()
+					} else {
+						pCurrentPort.Entry()
+						pCurrentPort.State = PortState_Unknown
+						pCurrentPort.IsFinished = true
+						pCurrentPort.Leave()
+					}
+
+					// 这个地方也是判断是否完成了所有的端口扫描
+					count = atomic.LoadInt32(&p.countOfFinished)
+					if count == p.countOfPortList {
+						// 扫描完成直接返回
+						// p.Close()
+						return
+					}
+
+					// 更新时间
+					p.lock_latestTime.Lock()
+					p.latestTime = time.Now()
+					p.lock_latestTime.Unlock()
+
+					if p.ResultCallback != nil {
+						go p.ResultCallback(pCurrentPort)
+					}
+
+				case rawsock.SocketType_DGRAM:
+					udplayer := packet.Layer(layers.LayerTypeUDP)
+					if udplayer == nil {
+						return
+					}
+
+					udp, ok := udplayer.(*layers.UDP)
+					if !ok {
+						return
+					}
+
+					if udp.DstPort != layers.UDPPort(p.sourcePort) {
+						return
+					}
+				}
+			}()
+			//case <-p.Done:
+			//	return
+			//}
 		}
 	}()
 	return nil
@@ -536,7 +560,8 @@ func (p *SimplePacketProcessor) Do() error {
 	if len(p.portList) == 0 {
 		return errors.New("not found scanned ports")
 	}
-	p.HandleProcess() // 增加监听
+	p.ScanState = ScannerState_Running //初始化扫描状态
+	p.HandleProcess()                  // 增加监听
 	count := 0
 	for {
 		//countOfFinished := atomic.LoadInt32(&p.countOfFinished)
@@ -608,8 +633,9 @@ func (p *SimplePacketProcessor) Do() error {
 }
 
 func (p *SimplePacketProcessor) Close() {
+	atomic.StoreInt32(&p.ScanState, ScannerState_Stop)
 	p.handle.Close()
-	p.Done <- struct{}{}
+	// p.Done <- struct{}{}
 }
 
 func (p *SimplePacketProcessor) Wait() {

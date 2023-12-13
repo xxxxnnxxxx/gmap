@@ -19,7 +19,7 @@ type Port struct {
 	State           int                                   `json:"State"`
 	NmapSeviceInfo  []*nmap_service_probe.NmapServiceNode `json:"-"`
 	NmapServiceName string                                `json:"servicename"`
-	SrvInfo         []string                              `json:"srvdetail"`
+	VersionInfo     []string                              `json:"version"`
 	IsFinished      bool                                  `json:"-"` // 是否完成端口扫描
 	AttmptNum       int                                   `json:"-"` // 尝试次数，
 	STime           time.Time                             `json:"-"` // 最近一次发送请求时间
@@ -27,7 +27,7 @@ type Port struct {
 
 func NewPort() *Port {
 	return &Port{
-		SrvInfo:        make([]string, 0),
+		VersionInfo:    make([]string, 0),
 		NmapSeviceInfo: make([]*nmap_service_probe.NmapServiceNode, 0),
 	}
 }
@@ -54,7 +54,7 @@ func (p *Port) SetState(state int) {
 
 func (p *Port) AddSrv(srv string) {
 	p.Lock.Lock()
-	p.SrvInfo = append(p.SrvInfo, srv)
+	p.VersionInfo = append(p.VersionInfo, srv)
 	p.Lock.Unlock()
 }
 
@@ -100,10 +100,20 @@ func (p *Port) ToNSServiceName() string {
 		if err != nil {
 			continue
 		}
-
-		if floatvar >= radio {
-			radio = floatvar
-			srvname = item.ServiceName
+		if p.PortType == PortType_TCP {
+			if item.Protocol == "tcp" {
+				if floatvar >= radio {
+					radio = floatvar
+					srvname = item.ServiceName
+				}
+			}
+		} else if p.PortType == PortType_UDP {
+			if item.Protocol == "udp" {
+				if floatvar >= radio {
+					radio = floatvar
+					srvname = item.ServiceName
+				}
+			}
 		}
 	}
 
@@ -112,8 +122,13 @@ func (p *Port) ToNSServiceName() string {
 
 func (p *Port) ToVersionInfo() string {
 	var result string
-	for _, item := range p.SrvInfo {
-		result += item
+	for _, item := range p.VersionInfo {
+		result += item + "/"
+	}
+	if len(result) > 1 {
+		if result[len(result)-1] == '/' {
+			result = result[:len(result)-1]
+		}
 	}
 
 	return result

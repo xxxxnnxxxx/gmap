@@ -85,8 +85,8 @@ type NmapServiceProbeNode struct {
 	SSLPorts     []uint16
 
 	Matchs     []*MatchMethod
-	Fallback1  *Fallback
-	NoPlayload bool // ???
+	Fallback1  *Fallback // 当当前的探测没有匹配的情况下，则顺序执行这个回退，查找匹配
+	NoPlayload bool      // ???
 }
 
 func NewProbeNode() *NmapServiceProbeNode {
@@ -232,18 +232,20 @@ func (p *NmapServiceProbeNode) Match(content string) ([]string, error) {
 
 // fallback
 type Fallback struct {
-	Cmdlines []string // 命令行
+	FallbackNames      []string // 命令行
+	FallbackProbeNodes []*NmapServiceProbeNode
 }
 
 func NewFallback() *Fallback {
 	return &Fallback{
-		Cmdlines: make([]string, 0),
+		FallbackNames:      make([]string, 0),
+		FallbackProbeNodes: make([]*NmapServiceProbeNode, 0),
 	}
 }
 
 func (p *Fallback) Analyze(script string) error {
-	cmds := strings.Split(script, ",")
-	p.Cmdlines = append(p.Cmdlines, cmds...)
+	names := strings.Split(script, ",")
+	p.FallbackNames = append(p.FallbackNames, names...)
 	return nil
 }
 
@@ -252,18 +254,20 @@ func (p *Fallback) Analyze(script string) error {
 match 和 softmatch 通过7.94 的代码发现目前处理格式相同
 */
 type MatchMethod struct {
-	IsSoftMatch   bool           // 是否为软匹配
-	ServiceName   string         // 服务名称
-	Pattern       string         // 正则表达式
-	IsContainerRN bool           // 在“.”中包含换行符 /s
-	IsIgnoreCase  bool           // 是否忽略大小写 /i
-	VersionInfos  []*VersionInfo // 版本信息
+	IsSoftMatch   bool            // 是否为软匹配
+	ServiceName   string          // 服务名称
+	Pattern       string          // 正则表达式
+	RegCompile    *regexp2.Regexp // 编译好的正则表达式
+	IsContainerRN bool            // 在“.”中包含换行符 /s
+	IsIgnoreCase  bool            // 是否忽略大小写 /i
+	VersionInfos  []*VersionInfo  // 版本信息
 }
 
 func NewMatchMethod(issoftmatch bool) *MatchMethod {
 	return &MatchMethod{
 		IsSoftMatch:  issoftmatch,
 		VersionInfos: make([]*VersionInfo, 0),
+		RegCompile:   nil,
 	}
 }
 
@@ -274,7 +278,8 @@ func (p *MatchMethod) getMatchArray(format string) ([]int, error) {
 	if err != nil {
 		return nil, err
 	}
-
+	// 匹配超时时间
+	reg.MatchTimeout = 200 * time.Millisecond
 	result := make([]int, 0)
 	match, err := reg.FindStringMatch(format)
 	for match != nil {
@@ -292,23 +297,13 @@ func (p *MatchMethod) getMatchArray(format string) ([]int, error) {
 // 返回值：
 // 是否匹配成功，匹配到的数据， 是否软匹配，返回错误
 func (p *MatchMethod) Match(content string) (bool, []string, bool, error) {
-	var reg1 *regexp2.Regexp
 	var err error
-	if p.IsIgnoreCase {
-		reg1, err = regexp2.Compile(p.Pattern, regexp2.IgnoreCase)
-		if err != nil {
-			return false, nil, p.IsSoftMatch, err
-		}
-	} else {
-		reg1, err = regexp2.Compile(p.Pattern, 0)
-		reg1.MatchTimeout = 200 * time.Millisecond
-		if err != nil {
-			return false, nil, p.IsSoftMatch, err
-		}
+	if p.RegCompile == nil {
+		return false, nil, p.IsSoftMatch, err
 	}
 
 	result := make([]string, 0)
-	match, err := reg1.FindStringMatch(content)
+	match, err := p.RegCompile.FindStringMatch(content)
 	if err != nil {
 		return false, nil, p.IsSoftMatch, err
 	}
@@ -323,19 +318,13 @@ func (p *MatchMethod) Match(content string) (bool, []string, bool, error) {
 		case 'p':
 			versioninfo += item.Description + " "
 		case 'v', 'i', 'd', 'h', 'o':
-			//pos, err := strconv.Atoi(item.Description[1:])
-			//if err != nil {
-			//	continue
-			//}
-			//
-			//// 获取匹配组
-			//gps := match.Groups()
-			//versioninfo += gps[pos].Captures[0].String()
 			regsz := `\$\d+`
 			reg, err := regexp2.Compile(regsz, 0)
 			if err != nil {
 				continue
 			}
+			// 设置匹配超时时间
+			reg.MatchTimeout = 200 * time.Millisecond
 			marray := make([]int, 0)
 			m, err := reg.FindStringMatch(item.Description)
 			if m == nil {
@@ -452,6 +441,21 @@ func (p *MatchMethod) Analyze(script string) error {
 			script_content = append(script_content, mscript[i])
 		}
 	}
+
+	// 初始化正则表达式
+	var regOption regexp2.RegexOptions = 0
+	if p.IsContainerRN {
+		regOption |= regexp2.Singleline
+	}
+	if p.IsIgnoreCase {
+		regOption |= regexp2.IgnoreCase
+	}
+	p.RegCompile, err = regexp2.Compile(p.Pattern, regOption)
+	if err != nil {
+		return err
+	}
+	p.RegCompile.MatchTimeout = 50 * time.Millisecond
+
 	return nil
 }
 
@@ -673,6 +677,29 @@ loop:
 	}
 	wg.Wait()
 	return 0, nil
+}
+
+// 通过探测名字找到探测
+func (p *NmapServiceProbe) FindProbeNodeByName(probeName string) *NmapServiceProbeNode {
+	for _, item := range p.ProbeNodes {
+		if item.Probename == probeName {
+			return item
+		}
+	}
+
+	return nil
+}
+
+func (p *NmapServiceProbe) InitializeFallback() error {
+	for _, item := range p.ProbeNodes {
+		if len(item.Fallback1.FallbackNames) > 0 {
+			for _, name := range item.Fallback1.FallbackNames {
+				item.Fallback1.FallbackProbeNodes = append(item.Fallback1.FallbackProbeNodes, p.FindProbeNodeByName(name))
+			}
+		}
+	}
+
+	return nil
 }
 
 func (p *NmapServiceProbe) ArrangeProbeNodes() error {

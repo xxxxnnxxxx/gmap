@@ -7,9 +7,17 @@ import (
 	"Gmap/gmap/manage/scanner"
 	"Gmap/gmap/netex/device"
 	"flag"
+	"github.com/felixge/fgprof"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 )
 
+func monitor() {
+	http.Handle("/debug/fgprof", fgprof.Handler())
+	log.Logger.Fatal(http.ListenAndServe(":9090", nil))
+
+}
 func main() {
 	var target string
 	var isSrvProbe bool
@@ -36,6 +44,8 @@ func main() {
 	flag.StringVar(&outputpath, "o", "", "输出到json文件")
 
 	flag.Parse()
+
+	go monitor()
 
 	if arp == true {
 		device.DeviceGlobalInit()

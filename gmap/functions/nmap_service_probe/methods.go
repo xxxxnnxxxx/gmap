@@ -2,6 +2,7 @@ package nmap_service_probe
 
 import (
 	"Gmap/gmap/netex/sock"
+	"errors"
 	"time"
 )
 
@@ -13,14 +14,14 @@ func GetData(protocol int,
 	data string,
 	timeout int64) (string, error) {
 	btcp := sock.NewBaseDialer(protocol, isTLS)
-	var content string
 	btcp.HandleData = func(data []byte, n int) {
-		content = string(data)
 		btcp.Close()
 	}
-
+	// 1m
+	btcp.SetCacheSize(1024 * 1024)
 	btcp.SetIP(host)
 	btcp.SetPort(port)
+	btcp.IsBlockMode = true
 	if timeout > 0 {
 		btcp.SetConnTimeout(timeout)
 		btcp.SetReadTimeout(timeout)
@@ -33,7 +34,11 @@ func GetData(protocol int,
 	btcp.Listen()
 	btcp.Send([]byte(data))
 	err := btcp.WaitTimeout(2 * time.Second)
-	return content, err
+	buf := btcp.GetRecvedBuf()
+	if len(buf) == 0 {
+		return "", errors.New("don't recved data")
+	}
+	return string(buf), err
 }
 
 func handleProbe(pn *NmapServiceProbeNode, protocol int, isTLS bool, host string, port uint16) ([]string, error) {
@@ -44,6 +49,13 @@ func handleProbe(pn *NmapServiceProbeNode, protocol int, isTLS bool, host string
 	// 匹配内容
 	result, err := pn.Match(content)
 	if err != nil {
+		// 如果没有找到相关的匹配，那么通过fallback查找
+		for _, item := range pn.Fallback1.FallbackProbeNodes {
+			result, err = item.Match(content)
+			if err == nil {
+				return result, nil
+			}
+		}
 		return nil, err
 	}
 	return result, nil

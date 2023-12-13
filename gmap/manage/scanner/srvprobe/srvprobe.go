@@ -97,7 +97,7 @@ func (p *SrvDetectiveScan) Ready() error {
 
 func (p *SrvDetectiveScan) Run(wg *sync.WaitGroup) error {
 	defer wg.Done()
-	log.Logger.Info("srvprobe is running.")
+	log.Logger.Info("Srvprobe is running.")
 	p.state = scanner.ScannerState_Running // 运行状态
 	for {
 		reqTask := p.taskStack.Pop()
@@ -134,7 +134,7 @@ func (p *SrvDetectiveScan) Run(wg *sync.WaitGroup) error {
 				p.MsgCallback(msg)
 			}
 
-			return errors.New("the scanner is terminated")
+			return errors.New("the SrvProbe is terminated")
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
@@ -145,7 +145,7 @@ func (p *SrvDetectiveScan) Run(wg *sync.WaitGroup) error {
 		}
 		p.MsgCallback(msg)
 	}
-	log.Logger.Info("srvprobe is stopped")
+	log.Logger.Info("Srvprobe is stopped")
 	return nil
 }
 
@@ -189,11 +189,11 @@ func (p *SrvDetectiveScan) worker(param interface{}) {
 	ste, ok := param.(*scanner.ScanTargetEntity)
 	if ok {
 		if ste.CurrentLevel&p.level > 0 {
-			info := fmt.Sprintf("service is probing: %v", ste.IP.String())
+			info := fmt.Sprintf("service probe is probing: %v", ste.IP.String())
 			log.Logger.Info(info)
 			// TODO: 在这个地方探测各种相关的服务内容
 			p.detectiveService(ste)
-			info = fmt.Sprintf("service is end: %v", ste.IP.String())
+			info = fmt.Sprintf("service probe is end: %v", ste.IP.String())
 			log.Logger.Info(info)
 		}
 
@@ -225,6 +225,11 @@ func (p *SrvDetectiveScan) loadNmapServiceProbeLib() error {
 
 	// 整理所有的端口和节点对应
 	p.nsp.ArrangeProbeNodes()
+	// 初始化所有的探测节点中的fallback
+	// 在所有的处理完成之后，然后初始化所有的fallback节点
+	// 目的就是为了防止在自定义节点的时候，fallback有可能在探测节点在当前节点的后面，
+	// 这样不能在加载文件的时候正确的加载fallback探测节点
+	p.nsp.InitializeFallback()
 	return nil
 }
 
@@ -261,7 +266,7 @@ func (p *SrvDetectiveScan) srvprobeHandle(wg *sync.WaitGroup, ip net.IP, port *s
 			srvinfo, err := item.Method.Method(item, port.PortType, false, ip.String(), port.Val)
 			if err == nil {
 				if len(srvinfo) > 0 {
-					port.SrvInfo = append(port.SrvInfo, srvinfo...)
+					port.VersionInfo = append(port.VersionInfo, srvinfo...)
 					break
 				} else {
 					continue
@@ -276,7 +281,7 @@ func (p *SrvDetectiveScan) srvprobeHandle(wg *sync.WaitGroup, ip net.IP, port *s
 			srvinfo, err := item.Method.Method(item, port.PortType, true, ip.String(), port.Val)
 			if err == nil {
 				if len(srvinfo) > 0 {
-					port.SrvInfo = append(port.SrvInfo, srvinfo...)
+					port.VersionInfo = append(port.VersionInfo, srvinfo...)
 					break
 				} else {
 					continue
