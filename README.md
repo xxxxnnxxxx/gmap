@@ -4,11 +4,14 @@
 
 例如：
 ```shell
-# syn scan
+# syn scan (-sS)
 gmap.exe -p 1-65535 -sS -t 192.168.1.3
 
-# connect scan
+# connect scan (-sT)
 gmap.exe -p 1-65535 -sT -t 192.168.1.3
+
+# service probe (-sV)
+gmap.exe -p 1-65535 -sS -sV -t 192.168.1.1/24
 ```
 输出：
 
