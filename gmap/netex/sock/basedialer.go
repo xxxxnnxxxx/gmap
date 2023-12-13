@@ -1,6 +1,7 @@
 package sock
 
 import (
+	"bytes"
 	"crypto/tls"
 	"errors"
 	"io"
@@ -33,7 +34,9 @@ type BaseDialer struct {
 	StateError  chan error
 	ConnTimeout time.Duration
 	ReadTimeout time.Duration
-	CacheSize   int // 接收数据的缓存大小
+	CacheSize   int           // 接收数据的缓存大小
+	IsBlockMode bool          // 是否阻塞模式 阻塞模式的情况下，数据处理是阻塞处理的, 不会分出协程
+	RecvedBuf   *bytes.Buffer // 接收到的数据buf
 }
 
 const (
@@ -51,6 +54,7 @@ func NewBaseDialer(protocoltype int, isTLS bool) *BaseDialer {
 		Signal:       make(chan int),
 		StateError:   make(chan error, 1000),
 		CacheSize:    10240,
+		RecvedBuf:    bytes.NewBuffer([]byte{}),
 	}
 }
 
@@ -83,6 +87,10 @@ func (p *BaseDialer) SetCacheSize(size int) {
 
 func (p *BaseDialer) SetTlsFlag(flag bool) {
 	p.IsTLS = flag
+}
+
+func (p *BaseDialer) GetRecvedBuf() []byte {
+	return p.RecvedBuf.Bytes()
 }
 
 func (p *BaseDialer) Send(buf []byte) (int, error) {
@@ -164,8 +172,14 @@ func (p *BaseDialer) Listen() error {
 				n, err := p.TlsConn.Read(buf)
 				if err != nil {
 					if n > 0 {
+						p.RecvedBuf.Write(buf)
 						if p.HandleData != nil {
-							go p.HandleData(buf, n)
+							if p.IsBlockMode {
+								p.HandleData(buf, n)
+							} else {
+								go p.HandleData(buf, n)
+							}
+
 						}
 					}
 
@@ -178,7 +192,12 @@ func (p *BaseDialer) Listen() error {
 				}
 				if n > 0 {
 					if p.HandleData != nil {
-						go p.HandleData(buf, n)
+						p.RecvedBuf.Write(buf)
+						if p.IsBlockMode {
+							p.HandleData(buf, n)
+						} else {
+							go p.HandleData(buf, n)
+						}
 					}
 				} else {
 					p.Signal <- Signal_RecvFinished
@@ -191,8 +210,13 @@ func (p *BaseDialer) Listen() error {
 				n, err := p.Conn.Read(buf)
 				if err != nil {
 					if n > 0 {
+						p.RecvedBuf.Write(buf)
 						if p.HandleData != nil {
-							go p.HandleData(buf, n)
+							if p.IsBlockMode {
+								p.HandleData(buf, n)
+							} else {
+								go p.HandleData(buf, n)
+							}
 						}
 					}
 					if err.Error() == "EOF" {
@@ -203,8 +227,13 @@ func (p *BaseDialer) Listen() error {
 					return
 				}
 				if n > 0 {
+					p.RecvedBuf.Write(buf)
 					if p.HandleData != nil {
-						go p.HandleData(buf, n)
+						if p.IsBlockMode {
+							p.HandleData(buf, n)
+						} else {
+							go p.HandleData(buf, n)
+						}
 					}
 				} else {
 					p.Signal <- Signal_RecvFinished
