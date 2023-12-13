@@ -45,7 +45,7 @@ func main() {
 
 	flag.Parse()
 
-	go monitor()
+	// go monitor()
 
 	if arp == true {
 		device.DeviceGlobalInit()
