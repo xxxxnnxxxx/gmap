@@ -76,29 +76,25 @@ func main() {
 	probeManager.PrintBanner()
 
 	if *s {
-		if *S == false && *T == false {
+		if *S == false && *T == false && *V == false {
 			log.Logger.Error("请选择一个扫描类型(SYN/TCP connect)")
 			os.Exit(1)
 		}
+
+		if *S {
+			probeManager.ScanType = scanner.ScanType_Syn
+		} else if *T {
+			probeManager.ScanType = scanner.ScanType_TCPConn
+		} else if *V {
+			probeManager.ScanType = scanner.ScanType_Syn
+			probeManager.IsSrvProbe = true
+		} else {
+			log.Logger.Error("指定扫描类型")
+			os.Exit(1)
+		}
 	} else {
-		log.Logger.Error("请指定sS/sT端口扫描方式")
+		log.Logger.Error("请指定sS/sT/sV端口扫描方式")
 		os.Exit(1)
-	}
-
-	// Port scan
-	if *s && *S {
-		probeManager.ScanType = scanner.ScanType_Syn
-	}
-
-	if *s && *T {
-		probeManager.ScanType = scanner.ScanType_TCPConn
-	}
-
-	// 加载服务探测
-	if *s && *V {
-		probeManager.IsSrvProbe = true
-	} else {
-		probeManager.IsSrvProbe = false
 	}
 
 	// 输出路径
