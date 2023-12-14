@@ -12,6 +12,7 @@ require (
 	github.com/mdlayher/arp v0.0.0-20220512170110-6706a2966875
 	github.com/mgutz/ansi v0.0.0-20200706080929-d51e80ef957d
 	github.com/panjf2000/ants/v2 v2.9.0
+	github.com/pborman/getopt/v2 v2.1.0
 	github.com/sirupsen/logrus v1.9.3
 	golang.org/x/crypto v0.0.0-20211215153901-e495a2d5b3d3
 	golang.org/x/net v0.8.0
