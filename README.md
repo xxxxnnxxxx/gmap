@@ -5,13 +5,13 @@
 例如：
 ```shell
 # syn scan (-sS)
-gmap.exe -p 1-65535 -sS -t 192.168.1.3
+gmap.exe -p1-65535 -sS 192.168.1.3
 
 # connect scan (-sT)
-gmap.exe -p 1-65535 -sT -t 192.168.1.3
+gmap.exe -p1-65535 -sT 192.168.1.3
 
 # service probe (-sV)
-gmap.exe -p 1-65535 -sS -sV -t 192.168.1.1/24
+gmap.exe -p1-65535 -sS -sV 192.168.1.1/24
 ```
 输出：
 
@@ -22,11 +22,11 @@ gmap.exe -p 1-65535 -sS -sV -t 192.168.1.1/24
 1. 打印接口信息
 
 ```shell
-gmap.exe -pif
+gmap.exe --print-interface
 ```
 
 2. 打印路由信息（暂时只显示IPV4)
 
 ```shell
-gmap.exe -route
+gmap.exe --print-route
 ```
