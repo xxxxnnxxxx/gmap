@@ -242,10 +242,15 @@ func (p *ProbeManager) IPtoTargetIP(IPs []net.IP) ([]*IPEntity, error) {
 		targetIP.IP = ip
 		p.IPEntites = append(p.IPEntites, targetIP)
 	}
-	info := fmt.Sprintf("探活和arp地址解析时间：%v 秒", time.Now().Sub(beginTime).Seconds())
-	log.Logger.Info(info)
-	info = fmt.Sprintf("共发现 %v 个ip地址可以探测到", canbeScanned)
-	log.Logger.Info(info)
+	if p.IsPingTest {
+		info := fmt.Sprintf("探活和arp地址解析时间：%v 秒", time.Now().Sub(beginTime).Seconds())
+		log.Logger.Info(info)
+		info = fmt.Sprintf("共发现 %v 个ip地址可以探测到", canbeScanned)
+		log.Logger.Info(info)
+	} else {
+		info := fmt.Sprintf("共扫描 %v 个ip地址", canbeScanned)
+		log.Logger.Info(info)
+	}
 
 	return p.IPEntites, nil
 }
