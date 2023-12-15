@@ -19,24 +19,20 @@ func monitor() {
 
 }
 func main() {
-	var szport string
-
-	s := opt.Bool('s', "端口扫描类")
-	S := opt.Bool('S', "SYN 扫描")
-	T := opt.Bool('T', "Connect 连接扫描")
+	s := opt.Bool('s', "扫描")
+	S := opt.Bool('S', "扫描——SYN方式 端口扫描")
+	T := opt.Bool('T', "扫描——TCP Connect方式 端口扫描")
 	V := opt.Bool('V', "探测服务版本")
 	P := opt.Bool('P', "ping 探活")
 	n := opt.Bool('n', "否定操作")
-	port := opt.String('p', "", "指定端口列表")
+	szport := opt.String('p', "", "指定端口列表, 形如: 80,443 或 1-1000")
+	ifindex := opt.IntLong("interface-index", 'i', -1, "指定网络接口索引")
+	outputpath := opt.StringLong("output", 'o', "", "指定输出文件路径")
 	printArp := opt.BoolLong("print-arp", 'a', "", "打印arp列表")
 	printRoute := opt.BoolLong("print-route", 'r', "", "打印路由表")
-	ifindex := opt.IntLong("interface-index", 'i', -1, "指定网络接口索引")
 	printInterface := opt.BoolLong("print-interface", 'e', "", "打印网络接口信息")
-	outputpath := opt.StringLong("output", 'o', "", "指定输出文件路径")
 
 	opt.Parse()
-
-	szport = *port
 
 	// go monitor()
 
@@ -64,14 +60,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	if len(common.TrimEx(szport)) == 0 {
+	if len(common.TrimEx(*szport)) == 0 {
 		log.Logger.Error("请输入要扫描的端口列表")
 		os.Exit(1)
 	}
 
 	// 保存端口和目标的参数
 	probeManager.ArgumentTarget = opt.Args()[0]
-	probeManager.ArgumentPorts = szport
+	probeManager.ArgumentPorts = *szport
 
 	probeManager.PrintBanner()
 
@@ -110,7 +106,7 @@ func main() {
 	}
 
 	// 端口
-	probeManager.Ports = append(probeManager.Ports, common.Splite_Port(szport)...)
+	probeManager.Ports = append(probeManager.Ports, common.Splite_Port(*szport)...)
 	// 分析targets
 	ips := common.GetIPsFromString(opt.Args()[0])
 	if len(ips) == 0 {
@@ -118,7 +114,6 @@ func main() {
 		os.Exit(1)
 	}
 	// 指定接口索引
-
 	probeManager.Ifindex = *ifindex
 	// 初始化
 	probeManager.Initialize(ips)
