@@ -237,6 +237,8 @@ func (p *ProbeManager) IPtoTargetIP(IPs []net.IP) ([]*IPEntity, error) {
 				targetIP.Nexthops = append(targetIP.Nexthops, np...)
 				targetIP.IsLoopback = np[0].IsLoopback
 			}
+		} else if p.ScanType == scanner.ScanType_UDP {
+
 		}
 
 		targetIP.IP = ip

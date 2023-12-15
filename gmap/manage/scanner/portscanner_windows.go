@@ -31,7 +31,7 @@ func TCPConnectProbe(entity *ScanTargetEntity) int {
 			pPort := pp
 			var times int
 			var timeout time.Duration
-			timeout = entity.Timeout
+			timeout = entity.Timeout * time.Second
 			btcp := sock.NewBaseDialer(sock.ProtocolType_TCP, false)
 			btcp.HandleData = func(data []byte, n int) {
 				fmt.Println(string(data))

@@ -191,7 +191,10 @@ func (p *PortScan) GetScannerName() string {
 func (p *PortScan) worker(param interface{}) {
 	ste, ok := param.(*ScanTargetEntity)
 	if ok {
-		if ste.CurrentLevel&p.level > 0 && ste.Nexthops != nil {
+		if ste.CurrentLevel&p.level > 0 {
+			if ste.PortScanType == ScanType_Syn && ste.Nexthops == nil {
+				return
+			}
 			info := fmt.Sprintf("portscanner is scanning: %v", ste.IP.String())
 			log.Logger.Info(info)
 			var waitSubTask sync.WaitGroup
