@@ -290,5 +290,37 @@ func (p *SrvDetectiveScan) srvprobeHandle(wg *sync.WaitGroup, ip net.IP, port *s
 		}
 	}
 
+	// 如果什么信息都没有找到，那么可以单独的跑一下80和443端口的测试
+	if len(port.VersionInfo) == 0 {
+		_, ok = p.nsp.PortsToNodes[80]
+		if ok {
+			for _, item := range p.nsp.PortsToNodes[port.Val] {
+				srvinfo, err := item.Method.Method(item, port.PortType, false, ip.String(), port.Val)
+				if err == nil {
+					if len(srvinfo) > 0 {
+						port.VersionInfo = append(port.VersionInfo, srvinfo...)
+						break
+					} else {
+						continue
+					}
+				}
+			}
+		}
+		_, ok = p.nsp.SSLPortsToNodes[443]
+		if ok {
+			for _, item := range p.nsp.SSLPortsToNodes[port.Val] {
+				srvinfo, err := item.Method.Method(item, port.PortType, true, ip.String(), port.Val)
+				if err == nil {
+					if len(srvinfo) > 0 {
+						port.VersionInfo = append(port.VersionInfo, srvinfo...)
+						break
+					} else {
+						continue
+					}
+				}
+			}
+		}
+	}
+
 	return nil
 }
