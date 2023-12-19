@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"github.com/google/gopacket/layers"
+	"github.com/google/gopacket/pcap"
 	"net"
 	"net/netip"
 )
@@ -331,6 +333,7 @@ type ArpTable struct {
 }
 
 type NexthopInfo struct {
+	Family      layers.ProtocolFamily // 协议Family
 	IP          net.IP
 	MAC         net.HardwareAddr
 	Route       *RouteInfoNode
@@ -361,6 +364,36 @@ func (p *NexthopInfo) Print() {
 		p.IP.String(), p.MAC[0], p.MAC[1], p.MAC[2], p.MAC[3], p.MAC[4], p.MAC[5])
 	fmt.Println(info)
 
+}
+
+// 设备句柄管理
+type DeviceHandle struct {
+	Handle     *pcap.Handle
+	IsLoopback bool
+}
+
+func NewDeviceHandle() *DeviceHandle {
+	return &DeviceHandle{
+		Handle:     nil,
+		IsLoopback: false,
+	}
+}
+
+func (p *DeviceHandle) Open(devLnkName string) error {
+	var err error
+	if p.Handle == nil {
+		p.Handle, err = OpenPcapDevice(devLnkName)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *DeviceHandle) Close() {
+	if p.Handle != nil {
+		p.Handle.Close()
+	}
 }
 
 // 得到所有的网络接口信息
