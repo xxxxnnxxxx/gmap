@@ -10,6 +10,7 @@ const (
 	ScannerType_PortScan     = 1 // 端口扫描
 	ScannerType_SrvDetection = 2 // 服务探测
 	ScannerType_WebVulnScan  = 4 // Web漏洞扫描
+	ScannerType_NucleiScan   = 8 // nuclei扫描器集成
 )
 
 // 扫描器状态
