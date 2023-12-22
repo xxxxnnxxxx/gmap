@@ -60,10 +60,10 @@ func main() {
 		os.Exit(1)
 	}
 
-	if len(common.TrimEx(*szport)) == 0 {
-		log.Logger.Error("请输入要扫描的端口列表")
-		os.Exit(1)
-	}
+	//if len(common.TrimEx(*szport)) == 0 {
+	//	log.Logger.Error("请输入要扫描的端口列表")
+	//	os.Exit(1)
+	//}
 
 	// 保存端口和目标的参数
 	probeManager.ArgumentTarget = opt.Args()[0]
@@ -106,7 +106,9 @@ func main() {
 	}
 
 	// 端口
-	probeManager.Ports = append(probeManager.Ports, common.Splite_Port(*szport)...)
+	if len(*szport) > 0 {
+		probeManager.Ports = append(probeManager.Ports, common.Splite_Port(*szport)...)
+	}
 	// 分析targets
 	ips := common.GetIPsFromString(opt.Args()[0])
 	if len(ips) == 0 {
