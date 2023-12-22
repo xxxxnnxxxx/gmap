@@ -253,6 +253,11 @@ func GetIPsFromString(sz string) []net.IP {
 
 		c, err := cidr.Parse(item)
 		if err != nil {
+			ip, err := net.ResolveIPAddr("ip", item)
+			if err != nil {
+				continue
+			}
+			result = append(result, ip.IP)
 			continue
 		}
 
