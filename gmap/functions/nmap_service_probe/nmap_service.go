@@ -68,6 +68,11 @@ func LoadNmapSerivce(nsPath string) error {
 		}
 
 		Global_NmapServices = append(Global_NmapServices, nmapServiceNode)
+		if nmapServiceNode.Protocol == "tcp" &&
+			len(nmapServiceNode.ServiceName) > 0 &&
+			nmapServiceNode.ServiceName != "unknown" {
+			Global_DefaultTCPPorts = append(Global_DefaultTCPPorts, uint16(nmapServiceNode.Port))
+		}
 	}
 	return nil
 }
@@ -90,3 +95,6 @@ func GetNmapServiceNode(port int) []*NmapServiceNode {
 
 // 全局保存服务描述表
 var Global_NmapServices []*NmapServiceNode
+
+// 全局默认TCP端口
+var Global_DefaultTCPPorts []uint16
