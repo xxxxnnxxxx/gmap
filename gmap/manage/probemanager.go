@@ -21,6 +21,7 @@ import (
 )
 
 type IPEntity struct {
+	Domain     string                `json:"domain"` // 域名
 	IP         net.IP                `json:"ip"`
 	IsUp       bool                  `json:"isup"` // 是否活跃
 	IsLoopback bool                  `json:"-"`    // 是否回环
@@ -52,6 +53,7 @@ type ResultSet struct {
 type ProbeManager struct {
 	ScanType      int         // 端口扫描类型
 	IsSrvProbe    bool        // 服务探测库，目前只有nmap
+	IsCheckHttp   bool        // 是否检查http协议
 	Ports         []uint16    // 端口列表
 	IPEntites     []*IPEntity // 目标IP
 	ScanEntities  []*scanner.ScanTargetEntity
@@ -139,7 +141,10 @@ func (p *ProbeManager) Initialize(IPs []net.IP) error {
 	if p.Ifindex > 0 {
 		p.II = device.GetInterfaceInfoByIndex(uint32(p.Ifindex))
 	}
-
+	// 如果端口没有被指定，那么指定默认端口
+	if len(p.Ports) == 0 {
+		p.Ports = append(p.Ports, nmap_service_probe.Global_DefaultTCPPorts...)
+	}
 	//
 	// 整理
 	// 在这个地方单独处理原因就是需要对扫描得端口和目标进行下一跳处理
