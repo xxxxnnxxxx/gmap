@@ -467,7 +467,7 @@ func (p *SimplePacketProcessor) sendSyn(port *Port) (bool, error) {
 	option_mss := layers.TCPOption{
 		OptionType:   layers.TCPOptionKindMSS,
 		OptionLength: 4,
-		OptionData:   []byte{0x02, 0x04},
+		OptionData:   []byte{0x05, 0xb4},
 	}
 
 	options := make([]layers.TCPOption, 0)
@@ -577,7 +577,6 @@ func (p *SimplePacketProcessor) Do() error {
 			p.Close()
 			break
 		}
-		// 记录发送时间
 		for _, port := range p.portList {
 			if count == 1 {
 				port.SrcPort = srcPort
@@ -587,6 +586,7 @@ func (p *SimplePacketProcessor) Do() error {
 				countofSended++
 			}
 		}
+
 		// 一个都没有发送出去，说明已经完成
 		// 那么直接退出发送程序
 		if countofSended == 0 {
