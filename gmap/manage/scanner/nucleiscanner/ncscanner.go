@@ -172,6 +172,7 @@ func (p *NucleiScanner) worker(param interface{}) {
 			info := fmt.Sprintf("service probe is probing: %v", ste.IP.String())
 			log.Logger.Info(info)
 			// TODO: 在这个地方探测各种相关的服务内容
+			p.detectiveInfo(ste)
 
 			info = fmt.Sprintf("service probe is end: %v", ste.IP.String())
 			log.Logger.Info(info)
@@ -189,5 +190,9 @@ func (p *NucleiScanner) createTaskPool() error {
 		log.Logger.Error(err)
 		return err
 	}
+	return nil
+}
+
+func (p *NucleiScanner) detectiveInfo(entity *scanner.ScanTargetEntity) error {
 	return nil
 }
