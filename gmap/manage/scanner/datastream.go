@@ -134,18 +134,29 @@ func (p *Port) ToVersionInfo() string {
 	return result
 }
 
+type NCResultItem struct {
+	ID     string
+	Target string
+	Result string
+}
+
 type ScanTargetEntity struct {
 	CurrentLevel       int    // 当前level
 	CurrentScannerType int    // 当前的扫描类型
 	PortScanType       int    // 扫描的端口方法(syn, tcp connect, udp)
 	From               string // uid 来自哪个扫描插件
 
+	TargetURL  string                // 执行的url, 当nuclei的时候起作用
 	IP         net.IP                // 指向的IP
 	IsUp       bool                  // 是否
 	IsLoopback bool                  // 是否回环
 	TargetPort []*Port               // 扫描目标端口信息
 	Nexthops   []*device.NexthopInfo // 下一跳信息
 	Timeout    time.Duration         // 设置扫描超时时间（秒)
+
+	// 主要针对nuclei扫描
+	Templates []string // 模板
+	NCResults []NCResultItem
 
 	NumOfAttempts int // 尝试次数 默认情况尝试3次
 }
@@ -158,6 +169,8 @@ func NewScanTargetEntity() *ScanTargetEntity {
 		Timeout:       2,
 		NumOfAttempts: 2,
 		IsLoopback:    false,
+		Templates:     make([]string, 0),
+		NCResults:     make([]NCResultItem, 0),
 	}
 }
 
@@ -174,6 +187,8 @@ func (p *ScanTargetEntity) ScanTypeString() string {
 		return "Service Detection"
 	case ScannerType_WebVulnScan:
 		return "Web Scan"
+	case ScannerType_NucleiScan:
+		return "Nuclei Scan"
 	default:
 		return "Unknown"
 	}
