@@ -11,7 +11,7 @@ gmap.exe -p1-65535 -sS 192.168.1.3
 gmap.exe -p1-65535 -sT 192.168.1.3
 
 # service probe (-sV)
-gmap.exe -p1-65535 -sS -sV 192.168.1.1/24
+gmap.exe -p1-65535 -sV 192.168.1.1/24
 ```
 输出：
 
