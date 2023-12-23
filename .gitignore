@@ -1,3 +1,7 @@
 go.sum
 .idea/
-cmd/example.go
+**/cmd/*
+!**/cmd/gmap.go
+**/build/*
+!**/build/data/
+!**/build/gmap.exe
