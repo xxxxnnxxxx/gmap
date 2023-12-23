@@ -5,3 +5,4 @@ go.sum
 **/build/*
 !**/build/data/
 !**/build/gmap.exe
+!**/build/arp.dll
