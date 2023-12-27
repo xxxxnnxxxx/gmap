@@ -10,6 +10,7 @@ import (
 	"github.com/google/gopacket/layers"
 	"net"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -148,12 +149,9 @@ type Socket struct {
 	UDPSock // 保留
 	Payload []byte
 
-	// 是否自动回复, 在接收到数据信息后，如果是自动，会自动处理接受到的消息
-	// 比如收到Syn直接回复Syn/Ack,
-	// 这个操作点，主要是返回给上一级的操作，如果不存在NotifyCallback函数
-	// 那么这个是否自动回复不起作用，默认自动回复
-	IsAutoReply    bool
-	NotifyCallback func()
+	// 通知回调，触发通知
+	IsTriggerNotify atomic.Bool
+	NotifyCallback  func()
 
 	databuf *common.Buffer
 	msg     chan int
@@ -166,7 +164,6 @@ func NewSocket() *Socket {
 		databuf:        common.NewBuffer(),
 		msg:            make(chan int),
 		NotifyCallback: nil,
-		IsAutoReply:    true,
 	}
 	result.TCPSock.Status = TS_UNKNOWN
 	result.Options = make([]layers.TCPOption, 0)

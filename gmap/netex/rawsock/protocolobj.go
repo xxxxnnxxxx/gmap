@@ -1,6 +1,7 @@
 package rawsock
 
 import (
+	"Gmap/gmap/common"
 	"Gmap/gmap/log"
 	"Gmap/gmap/netex/device"
 	"encoding/binary"
@@ -35,10 +36,11 @@ const (
 )
 
 type ProtocolObject struct {
-	DevHandle  *device.DeviceHandle
-	Ifs        []pcap.Interface      // 所有的接口信息
-	II         *device.InterfaceInfo // 网络接口信息
-	SocketType int                   // 数据类型
+	DevHandle     *device.DeviceHandle
+	Ifs           []pcap.Interface      // 所有的接口信息
+	II            *device.InterfaceInfo // 网络接口信息
+	SocketType    int                   // 数据类型
+	deviceLnkName string
 
 	Wg         sync.WaitGroup
 	Timeout    time.Duration // 设置监听时间 Listen的时间
@@ -53,9 +55,7 @@ type ProtocolObject struct {
 	TCPSocketsList  map[string]*Socket // 保存所有的连接的socket
 	UDPSocketsList  map[string]*Socket
 
-	AcceptSocket  chan *Socket
-	msg           chan int
-	deviceLnkName string
+	accpetStack *common.Stack
 }
 
 func NewProtocolObjectByLnkName(socketType int) *ProtocolObject {
@@ -66,10 +66,9 @@ func NewProtocolObjectByLnkName(socketType int) *ProtocolObject {
 		Ifs:            make([]pcap.Interface, 0),
 		Done:           make(chan struct{}),
 		OriginSocket:   nil,
-		AcceptSocket:   make(chan *Socket),
 		TCPSocketsList: make(map[string]*Socket),
 		UDPSocketsList: make(map[string]*Socket),
-		msg:            make(chan int),
+		accpetStack:    common.NewStack(),
 	}
 
 	return instance
@@ -206,7 +205,7 @@ func (p *ProtocolObject) Startup() error {
 	}
 
 	// 启动消息循环，获取消息
-	return p.recvLoopback()
+	return p.msgLoop()
 }
 
 func (p *ProtocolObject) CloseDevice() {
@@ -238,7 +237,7 @@ func (p *ProtocolObject) sendBuffer(handle *device.DeviceHandle, bytes []byte) e
 	return device.SendBuf(handle.Handle, bytes)
 }
 
-func (p *ProtocolObject) recvLoopback() error {
+func (p *ProtocolObject) msgLoop() error {
 	if p.DevHandle == nil {
 		return errors.New("please open the device.")
 	}
@@ -428,7 +427,7 @@ func (p *ProtocolObject) RemoveSockFromList(s *Socket) {
 	p.lock_SocketList.Unlock()
 }
 
-func (p *ProtocolObject) IsInAcceptSockets(s *Socket) (*Socket, bool) {
+func (p *ProtocolObject) IsInBufferSockets(s *Socket) (*Socket, bool) {
 	flag := fmt.Sprintf("%v:%v", s.RemoteIP.String(), s.RemotePort)
 	ret, ok := p.TCPSocketsList[flag]
 	if ok {
@@ -715,26 +714,26 @@ func (p *ProtocolObject) SendFinAck(s *Socket, payload []byte) error {
 	return err
 }
 
-func (p *ProtocolObject) tcpsignalHandle(acceptSock *Socket, buf []byte) (int, error) {
+func (p *ProtocolObject) tcpsignalHandle(s *Socket, buf []byte) (int, error) {
 	var tcp_signal int
-	if acceptSock.SocketType == SocketType_STREAM {
+	if s.SocketType == SocketType_STREAM {
 
-		if acceptSock.TCPSock.SYN {
+		if s.TCPSock.SYN {
 			tcp_signal |= TCP_SIGNAL_SYN
 		}
-		if acceptSock.TCPSock.RST {
+		if s.TCPSock.RST {
 			tcp_signal |= TCP_SIGNAL_RST
 		}
-		if acceptSock.TCPSock.ACK {
+		if s.TCPSock.ACK {
 			tcp_signal |= TCP_SIGNAL_ACK
 		}
-		if acceptSock.TCPSock.FIN {
+		if s.TCPSock.FIN {
 			tcp_signal |= TCP_SIGNAL_FIN
 		}
-		if acceptSock.TCPSock.URG {
+		if s.TCPSock.URG {
 			tcp_signal |= TCP_SIGNAL_URG
 		}
-		if acceptSock.TCPSock.PSH {
+		if s.TCPSock.PSH {
 			tcp_signal |= TCP_SIGNAL_PSH
 		}
 	} else {
@@ -743,65 +742,68 @@ func (p *ProtocolObject) tcpsignalHandle(acceptSock *Socket, buf []byte) (int, e
 	return tcp_signal, nil
 }
 
-func (p *ProtocolObject) protocolStackHandle(acceptSock *Socket) error {
-	if acceptSock.SocketType == SocketType_STREAM {
+func (p *ProtocolObject) protocolStackHandle(s *Socket) error {
+	var pSock *Socket = nil
+	if s.SocketType == SocketType_STREAM {
 		// 处理信号
 		var tcp_signal int
-		if acceptSock.TCPSock.SYN {
+		if s.TCPSock.SYN {
 			tcp_signal |= TCP_SIGNAL_SYN
 		}
-		if acceptSock.TCPSock.RST {
+		if s.TCPSock.RST {
 			tcp_signal |= TCP_SIGNAL_RST
 		}
-		if acceptSock.TCPSock.ACK {
+		if s.TCPSock.ACK {
 			tcp_signal |= TCP_SIGNAL_ACK
 		}
-		if acceptSock.TCPSock.FIN {
+		if s.TCPSock.FIN {
 			tcp_signal |= TCP_SIGNAL_FIN
 		}
-		if acceptSock.TCPSock.URG {
+		if s.TCPSock.URG {
 			tcp_signal |= TCP_SIGNAL_URG
 		}
-		if acceptSock.TCPSock.PSH {
+		if s.TCPSock.PSH {
 			tcp_signal |= TCP_SIGNAL_PSH
 		}
 
 		switch tcp_signal {
 		case TCP_SIGNAL_SYN:
-			_, ok := p.IsInAcceptSockets(acceptSock)
+			_, ok := p.IsInBufferSockets(s)
 			if !ok {
-				p.Append(acceptSock)
-				p.SendSynAck(acceptSock, nil)
-				acceptSock.TCPSock.Status = TCP_SYN_RECV
+				pSock = s // 加入的Socket结构地址
+				p.Append(s)
+				p.SendSynAck(s, nil)
+				s.TCPSock.Status = TCP_SYN_RECV
 			}
 		case TCP_SIGNAL_SYN | TCP_SIGNAL_ACK:
-			_, ok := p.IsInAcceptSockets(acceptSock)
+			_, ok := p.IsInBufferSockets(s)
 			if !ok {
-				//if p.IsInOrigin(acceptSock.RemoteIP, acceptSock.RemotePort) {
-				//	p.Append(acceptSock)
-				//	p.SendAck(acceptSock, nil)
-				//	acceptSock.TCPSock.Status = TCP_ESTABLISHED
-				//}
+				pSock = s // 加入的Socket结构地址
+				p.Append(s)
+				p.SendAck(s, nil)
+				s.TCPSock.Status = TCP_ESTABLISHED
 			}
 		case TCP_SIGNAL_FIN | TCP_SIGNAL_ACK:
-			sock, ok := p.IsInAcceptSockets(acceptSock)
+			sock, ok := p.IsInBufferSockets(s)
 			if ok {
+				pSock = sock // 加入的Socket结构地址
 				if sock.IsSupportTimestamp {
-					sock.TsEcho = acceptSock.GetTsEcho() // bigendian
+					sock.TsEcho = s.GetTsEcho() // bigendian
 				}
 				if sock.TCPSock.Status == TCP_ESTABLISHED {
 					sock.TCPSock.Status = TCP_CLOSE_WAIT
 					p.SendAck(sock, nil)
 				}
 			}
-			p.SendAck(acceptSock, nil)
+			p.SendAck(s, nil)
 		case TCP_SIGNAL_PSH | TCP_SIGNAL_ACK:
-			sock, ok := p.IsInAcceptSockets(acceptSock)
+			sock, ok := p.IsInBufferSockets(s)
 			if ok {
+				pSock = sock // 加入的Socket结构地址
 				if sock.TCPSock.Status == TCP_ESTABLISHED {
 					// 处理数据
-					if len(acceptSock.Payload) > 0 {
-						sock.databuf.Write(acceptSock.Payload, len(acceptSock.Payload))
+					if len(s.Payload) > 0 {
+						sock.databuf.Write(s.Payload, len(s.Payload))
 						sock.msg <- SocketMsg_RecvData
 					}
 					// 已经建立了连接
@@ -813,15 +815,17 @@ func (p *ProtocolObject) protocolStackHandle(acceptSock *Socket) error {
 			// p.SendAck(acceptSock, nil)
 		case TCP_SIGNAL_ACK:
 			//
-			sock, ok := p.IsInAcceptSockets(acceptSock)
+			sock, ok := p.IsInBufferSockets(s)
 			if ok {
+				pSock = sock // 加入的Socket结构地址
 				if sock.TCPSock.Status == TCP_SYN_RECV {
 					// 已经发送的Syn+Ack
 					sock.TCPSock.Status = TCP_ESTABLISHED
-					p.AcceptSocket <- sock
+					// p.AcceptSocket <- sock
+					p.accpetStack.Push(pSock)
 				} else if sock.TCPSock.Status == TCP_ESTABLISHED {
 					// 已经建立连接，则可能接收到数据
-					sock.databuf.Write(acceptSock.Payload, len(acceptSock.Payload))
+					sock.databuf.Write(s.Payload, len(s.Payload))
 					sock.msg <- SocketMsg_RecvData
 				} else if sock.TCPSock.Status == TCP_FIN_WAIT1 {
 					sock.TCPSock.Status = TCP_FIN_WAIT2
@@ -829,10 +833,10 @@ func (p *ProtocolObject) protocolStackHandle(acceptSock *Socket) error {
 					sock.TCPSock.Status = TCP_TIME_WAIT
 					// 启动定时器
 					TimerCall(0, 2*MSL, func() {
-						if acceptSock.Status == TCP_TIME_WAIT {
+						if s.Status == TCP_TIME_WAIT {
 							return
-						} else if acceptSock.Status == TCP_FIN_WAIT2 {
-							acceptSock.Status = TCP_CLOSE
+						} else if s.Status == TCP_FIN_WAIT2 {
+							s.Status = TCP_CLOSE
 						}
 					})
 				} else if sock.TCPSock.Status == TCP_TIME_WAIT {
@@ -842,11 +846,19 @@ func (p *ProtocolObject) protocolStackHandle(acceptSock *Socket) error {
 				}
 			}
 		}
-	} else if acceptSock.SocketType == SocketType_DGRAM {
-		if len(acceptSock.Payload) > 0 {
-			go func() {
-				p.AcceptSocket <- acceptSock
-			}()
+	} else if s.SocketType == SocketType_DGRAM {
+		//if len(s.Payload) > 0 {
+		//	go func() {
+		//		p.AcceptSocket <- s
+		//	}()
+		//}
+	}
+
+	// 触发通知回调
+	if pSock != nil {
+		isNotify := pSock.IsTriggerNotify.Load()
+		if s.NotifyCallback != nil && isNotify {
+			s.NotifyCallback()
 		}
 	}
 
@@ -864,10 +876,20 @@ func (p *ProtocolObject) Connect(targetIP net.IP, targetPort uint16, nexthopMAC 
 	if p.SocketType != SocketType_STREAM {
 		return nil, errors.New("not TCP_STREAM")
 	}
+	wg := new(sync.WaitGroup)
+	wg.Add(1)
 	p.OriginSocket.Lock.Lock()
 	p.OriginSocket.RemoteIP = targetIP
 	p.OriginSocket.RemotePort = targetPort
 	p.OriginSocket.Nexthop = append(p.OriginSocket.Nexthop, nexthopMAC...)
+	p.OriginSocket.IsTriggerNotify.Store(true)
+	p.OriginSocket.NotifyCallback = func() {
+		isNotifiy := p.OriginSocket.IsTriggerNotify.Load()
+		if p.OriginSocket.Status == TCP_ESTABLISHED && isNotifiy {
+			p.OriginSocket.IsTriggerNotify.Store(false)
+			wg.Done()
+		}
+	}
 	p.OriginSocket.Lock.Unlock()
 
 	// 压入列表
@@ -882,19 +904,23 @@ func (p *ProtocolObject) Connect(targetIP net.IP, targetPort uint16, nexthopMAC 
 		return nil, err
 	}
 
+	wg.Wait() // 等待连接完成
+
 	return nil, nil
 }
 
 func (p *ProtocolObject) Accept() (*Socket, error) {
 	var result *Socket = nil
-	select {
-	case sock := <-p.AcceptSocket:
-		result = sock
-	case msg := <-p.msg:
-		switch msg {
-		case SocketMsg_Closed:
-			return nil, errors.New("the socket is closed")
+
+	for {
+		entity := p.accpetStack.Pop()
+		if entity != nil {
+			if acceptSocket, ok := entity.(*Socket); ok {
+				result = acceptSocket
+				break
+			}
 		}
+		time.Sleep(10 * time.Millisecond)
 	}
 
 	return result, nil
