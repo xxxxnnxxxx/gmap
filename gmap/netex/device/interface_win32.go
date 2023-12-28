@@ -7,7 +7,30 @@ import (
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 	"net/netip"
+	"syscall"
 )
+
+// 导出FlushIPnetTable2
+var (
+	modiphlpapi          = windows.NewLazySystemDLL("iphlpapi.dll")
+	procFlushIpNetTable2 = modiphlpapi.NewProc("FlushIpNetTable2")
+)
+
+func getFlushIpNetTable2(family winipcfg.AddressFamily) (ret error) {
+	r0, _, _ := syscall.SyscallN(procFlushIpNetTable2.Addr(), uintptr(family), 0)
+	if r0 != 0 {
+		ret = syscall.Errno(r0)
+	}
+	return
+}
+
+func FlushIpNetTable2(family winipcfg.AddressFamily) error {
+	err := getFlushIpNetTable2(family)
+	if err != nil {
+		return err
+	}
+	return nil
+}
 
 // 获取本地网卡信息
 func GetInterfaces(af uint16) ([]*winipcfg.IPAdapterAddresses, error) {
@@ -31,6 +54,12 @@ func FindIntefaceInfo(af uint16, ifIndex uint32) (*InterfaceInfo, error) {
 
 // 获取所有的或有节点表
 func GetRouteInfoTable() ([]*RouteInfoNode, error) {
+	// 刷新路由
+	//routeTables, err := winipcfg.GetIPForwardTable2(windows.AF_UNSPEC)
+	//for _, item := range routeTables {
+	//	item.InterfaceLUID.FlushRoutes(windows.AF_UNSPEC)
+	//}
+	FlushIpNetTable2(windows.AF_UNSPEC)
 	// 通过API获取系统路由信息
 	routeTables, err := winipcfg.GetIPForwardTable2(windows.AF_UNSPEC)
 	if err != nil {
