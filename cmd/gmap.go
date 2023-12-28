@@ -20,7 +20,7 @@ func monitor() {
 }
 func main() {
 	s := opt.Bool('s', "扫描")
-	S := opt.Bool('S', "扫描——SYN方式 端口扫描")
+	S := opt.Bool('S', "扫描——TCP SYN方式 端口扫描")
 	T := opt.Bool('T', "扫描——TCP Connect方式 端口扫描")
 	V := opt.Bool('V', "探测服务版本")
 	P := opt.Bool('P', "ping 探活")
@@ -28,11 +28,18 @@ func main() {
 	szport := opt.String('p', "", "指定端口列表, 形如: 80,443 或 1-1000")
 	ifindex := opt.IntLong("interface-index", 'i', -1, "指定网络接口索引")
 	outputpath := opt.StringLong("output", 'o', "", "指定输出文件路径")
-	printArp := opt.BoolLong("print-arp", 'a', "", "打印arp列表")
-	printRoute := opt.BoolLong("print-route", 'r', "", "打印路由表")
-	printInterface := opt.BoolLong("print-interface", 'e', "", "打印网络接口信息")
+	printArp := opt.BoolLong("print-arp", 'a', "打印arp列表")
+	printRoute := opt.BoolLong("print-route", 'r', "打印路由表")
+	printInterface := opt.BoolLong("print-interface", 'e', "打印网络接口信息")
 
 	opt.Parse()
+
+	// 判断没有参数的情况下，
+	// 直接
+	if len(os.Args) == 1 {
+		opt.Usage()
+		return
+	}
 
 	// go monitor()
 
@@ -68,7 +75,6 @@ func main() {
 	// 保存端口和目标的参数
 	probeManager.ArgumentTarget = opt.Args()[0]
 	probeManager.ArgumentPorts = *szport
-
 	probeManager.PrintBanner()
 
 	if *s {
