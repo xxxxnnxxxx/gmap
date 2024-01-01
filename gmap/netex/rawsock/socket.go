@@ -2,12 +2,10 @@ package rawsock
 
 import (
 	"Gmap/gmap/common"
-	"Gmap/gmap/log"
 	"Gmap/gmap/netex/device"
 	"encoding/binary"
-	"errors"
-	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
+	"math/rand"
 	"net"
 	"sync"
 	"sync/atomic"
@@ -113,11 +111,23 @@ func GeneratePort() int {
 	return base_port
 }
 
+func generateRandowSeq() uint32 {
+	// 使用当前时间的纳秒级别时间戳作为种子
+	rand.Seed(time.Now().UnixNano())
+
+	// 生成一个随机的 uint32 整数
+	randomUint32 := rand.Uint32()
+
+	return randomUint32
+}
+
 type TCPSock struct {
 	Status int // TCP状态
 	// TCP 信息
-	Seq                                        uint32
-	Ack                                        uint32
+	SeqNum                                     uint32 // 顺序号
+	AckNum                                     uint32 // 确认序列号
+	RecvedSeqNum                               uint32 // 接收到的顺序号
+	RecvedAckNum                               uint32 // 确认序列号
 	DataOffset                                 uint8
 	FIN, SYN, RST, PSH, ACK, URG, ECE, CWR, NS bool
 	Options                                    []layers.TCPOption
@@ -146,8 +156,11 @@ type Socket struct {
 	LocalMAC  net.HardwareAddr
 
 	TCPSock
-	UDPSock // 保留
-	Payload []byte
+	UDPSock             // 保留
+	PreLenOfSent uint32 // 上一个发送的数据包长度
+
+	LenOfRecved   uint32 // 接收的数据包长度
+	RecvedPayload []byte
 
 	// 通知回调，触发通知
 	IsTriggerNotify atomic.Bool
@@ -160,7 +173,7 @@ type Socket struct {
 
 func NewSocket() *Socket {
 	result := &Socket{
-		Payload:        make([]byte, 0),
+		RecvedPayload:  make([]byte, 0),
 		databuf:        common.NewBuffer(),
 		msg:            make(chan int),
 		NotifyCallback: nil,
@@ -171,23 +184,27 @@ func NewSocket() *Socket {
 }
 
 func (p *Socket) Clone() *Socket {
+
 	return nil
 }
 
-func (p *Socket) SetSocketType(socketType int) {
-	p.SocketType = socketType
-}
+// 更新序列号
+func (p *Socket) UpdateNum() {
+	if p.SocketType == SocketType_DGRAM {
+		if p.PreLenOfSent == 0 {
+			p.SeqNum++
+		} else {
+			p.SeqNum += p.PreLenOfSent
+		}
 
-func (p *Socket) SetLocalMAC(localMAC net.HardwareAddr) {
-	p.LocalMAC = localMAC
-}
+		if p.LenOfRecved == 0 {
+			p.AckNum = p.RecvedSeqNum + 1
+		} else {
+			p.AckNum = p.RecvedSeqNum + p.LenOfRecved
+		}
+	} else if p.SocketType == SocketType_DGRAM {
+	}
 
-func (p *Socket) SetLocalIP(localIP net.IP) {
-	p.LocalIP = localIP
-}
-
-func (p *Socket) GetSocketType() int {
-	return p.SocketType
 }
 
 func (p *Socket) GetTsEcho() uint32 {
@@ -200,269 +217,4 @@ func (p *Socket) GetTsEcho() uint32 {
 	}
 
 	return result
-}
-
-func (p *Socket) GenerateFlag() int64 {
-	return int64(p.RemotePort)
-}
-
-func (p *Socket) PrintState() {
-	info, ok := TCPStatusInfoMap[p.TCPSock.Status]
-	if !ok {
-		return
-	}
-	log.Logger.Info(info)
-}
-
-func GenerateTCPPackage(srcIP net.IP,
-	srcMac net.HardwareAddr,
-	dstIP net.IP,
-	dstMac net.HardwareAddr,
-	srcPort uint16,
-	dstPort uint16,
-	tcp_signal int,
-	seq uint32,
-	ack uint32,
-	options []layers.TCPOption,
-	payload []byte,
-	isLoopback bool) ([]byte, error) {
-
-	// 判断ip类型
-	if dstIP.To4() != nil && srcIP.To4() != nil {
-		// ip layer
-		ipv4 := &layers.IPv4{}
-		ipv4.Version = 4
-		ipv4.Protocol = layers.IPProtocolTCP
-		ipv4.SrcIP = srcIP
-		ipv4.DstIP = dstIP
-		//ipv4.Length = 20
-		ipv4.TTL = 255
-
-		// tcp layer
-		tcp := &layers.TCP{}
-		tcp.SrcPort = layers.TCPPort(srcPort)
-		tcp.DstPort = layers.TCPPort(dstPort)
-		tcp.Window = 1024
-		if tcp_signal&TCP_SIGNAL_ACK > 0 {
-			tcp.ACK = true
-		}
-		if tcp_signal&TCP_SIGNAL_SYN > 0 {
-			tcp.SYN = true
-		}
-		if tcp_signal&TCP_SIGNAL_FIN > 0 {
-			tcp.FIN = true
-		}
-		if tcp_signal&TCP_SIGNAL_RST > 0 {
-			tcp.RST = true
-		}
-		if tcp_signal&TCP_SIGNAL_URG > 0 {
-			tcp.URG = true
-		}
-		if tcp_signal&TCP_SIGNAL_PSH > 0 {
-			tcp.PSH = true
-		}
-		tcp.Seq = seq
-		tcp.Ack = ack
-		tcp.Payload = append(tcp.Payload, payload...)
-		tcp.Options = append(tcp.Options, options...)
-		tcp.SetNetworkLayerForChecksum(ipv4)
-
-		// options
-		opts := gopacket.SerializeOptions{}
-		opts.ComputeChecksums = true
-		opts.FixLengths = true
-
-		buf := gopacket.NewSerializeBuffer()
-		if isLoopback {
-			loopbackLayer := &layers.Loopback{}
-			loopbackLayer.Family = layers.ProtocolFamilyIPv4
-			err := gopacket.SerializeLayers(buf, opts, loopbackLayer, ipv4, tcp)
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			// eth layer
-			ethernet := &layers.Ethernet{}
-			ethernet.EthernetType = 0x800
-			ethernet.DstMAC = dstMac
-			ethernet.SrcMAC = srcMac
-			err := gopacket.SerializeLayers(buf, opts, ethernet, ipv4, tcp)
-			if err != nil {
-				return nil, err
-			}
-		}
-
-		return buf.Bytes(), nil
-	} else if dstIP.To16() != nil && srcIP.To16() != nil {
-		// ip layer
-		ipv6 := &layers.IPv6{}
-		ipv6.Version = 4
-		ipv6.NextHeader = layers.IPProtocolTCP
-		ipv6.SrcIP = srcIP
-		ipv6.DstIP = dstIP
-		//ipv4.Length = 20
-		ipv6.HopLimit = 255
-
-		// tcp layer
-		tcp := &layers.TCP{}
-		tcp.SrcPort = layers.TCPPort(srcPort)
-		tcp.DstPort = layers.TCPPort(dstPort)
-		tcp.Window = 1024
-		if tcp_signal&TCP_SIGNAL_ACK > 0 {
-			tcp.ACK = true
-		}
-		if tcp_signal&TCP_SIGNAL_SYN > 0 {
-			tcp.SYN = true
-		}
-		if tcp_signal&TCP_SIGNAL_FIN > 0 {
-			tcp.FIN = true
-		}
-		if tcp_signal&TCP_SIGNAL_RST > 0 {
-			tcp.RST = true
-		}
-		if tcp_signal&TCP_SIGNAL_URG > 0 {
-			tcp.URG = true
-		}
-		if tcp_signal&TCP_SIGNAL_PSH > 0 {
-			tcp.PSH = true
-		}
-		tcp.Seq = seq
-		tcp.Ack = ack
-		tcp.Payload = append(tcp.Payload, payload...)
-		tcp.Options = append(tcp.Options, options...)
-		tcp.SetNetworkLayerForChecksum(ipv6)
-
-		// options
-		opts := gopacket.SerializeOptions{}
-		opts.ComputeChecksums = true
-		opts.FixLengths = true
-
-		buf := gopacket.NewSerializeBuffer()
-		if isLoopback {
-			loopbackLayer := &layers.Loopback{}
-			loopbackLayer.Family = layers.ProtocolFamilyIPv6BSD
-			err := gopacket.SerializeLayers(buf, opts, loopbackLayer, ipv6, tcp)
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			// eth layer
-			ethernet := &layers.Ethernet{}
-			ethernet.EthernetType = 0x800
-			ethernet.DstMAC = dstMac
-			ethernet.SrcMAC = srcMac
-			err := gopacket.SerializeLayers(buf, opts, ethernet, ipv6, tcp)
-			if err != nil {
-				return nil, err
-			}
-		}
-
-		return buf.Bytes(), nil
-	}
-
-	return nil, errors.New("ip error")
-}
-
-func GenerateUDPPackage(srcIP net.IP,
-	srcMac net.HardwareAddr,
-	dstIP net.IP,
-	dstMac net.HardwareAddr,
-	srcPort uint16,
-	dstPort uint16,
-	payload []byte,
-	isLoopback bool) ([]byte, error) {
-
-	// 判断ip类型
-	if dstIP.To4() != nil && srcIP.To4() != nil {
-		// ip layer
-		ipv4 := &layers.IPv4{}
-		ipv4.Version = 4
-		ipv4.Protocol = layers.IPProtocolTCP
-		ipv4.SrcIP = srcIP
-		ipv4.DstIP = dstIP
-		//ipv4.Length = 20
-		ipv4.TTL = 255
-
-		// udp layer
-		udp := &layers.UDP{}
-		udp.SrcPort = layers.UDPPort(srcPort)
-		udp.DstPort = layers.UDPPort(dstPort)
-		udp.Payload = append(udp.Payload, payload...)
-
-		udp.SetNetworkLayerForChecksum(ipv4)
-
-		// options
-		opts := gopacket.SerializeOptions{}
-		opts.ComputeChecksums = true
-		opts.FixLengths = true
-
-		buf := gopacket.NewSerializeBuffer()
-		if isLoopback {
-			loopbackLayer := &layers.Loopback{}
-			loopbackLayer.Family = layers.ProtocolFamilyIPv4
-			err := gopacket.SerializeLayers(buf, opts, loopbackLayer, ipv4, udp)
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			// eth layer
-			ethernet := &layers.Ethernet{}
-			ethernet.EthernetType = 0x800
-			ethernet.DstMAC = dstMac
-			ethernet.SrcMAC = srcMac
-			err := gopacket.SerializeLayers(buf, opts, ethernet, ipv4, udp)
-
-			if err != nil {
-				return nil, err
-			}
-		}
-
-		return buf.Bytes(), nil
-	} else if dstIP.To16() != nil && srcIP.To16() != nil {
-		// ip layer
-		ipv6 := &layers.IPv6{}
-		ipv6.Version = 4
-		ipv6.NextHeader = layers.IPProtocolTCP
-		ipv6.SrcIP = srcIP
-		ipv6.DstIP = dstIP
-		//ipv4.Length = 20
-		ipv6.HopLimit = 255
-
-		// tcp layer
-		udp := &layers.UDP{}
-		udp.SrcPort = layers.UDPPort(srcPort)
-		udp.DstPort = layers.UDPPort(dstPort)
-		udp.Payload = append(udp.Payload, payload...)
-
-		udp.SetNetworkLayerForChecksum(ipv6)
-
-		// options
-		opts := gopacket.SerializeOptions{}
-		opts.ComputeChecksums = true
-		opts.FixLengths = true
-
-		buf := gopacket.NewSerializeBuffer()
-		if isLoopback {
-			loopbackLayer := &layers.Loopback{}
-			loopbackLayer.Family = layers.ProtocolFamilyIPv4
-			err := gopacket.SerializeLayers(buf, opts, loopbackLayer, ipv6, udp)
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			// eth layer
-			ethernet := &layers.Ethernet{}
-			ethernet.EthernetType = 0x800
-			ethernet.DstMAC = dstMac
-			ethernet.SrcMAC = srcMac
-			err := gopacket.SerializeLayers(buf, opts, ethernet, ipv6, udp)
-
-			if err != nil {
-				return nil, err
-			}
-		}
-		return buf.Bytes(), nil
-	}
-
-	return nil, errors.New("")
 }

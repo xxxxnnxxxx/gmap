@@ -366,9 +366,6 @@ func (p *ProtocolObject) msgLoop() error {
 						return
 					}
 
-					// 分配socket信息
-					acceptSock.SetSocketType(p.SocketType)
-					//
 					var loopback *layers.Loopback
 					var eth *layers.Ethernet
 
@@ -402,8 +399,8 @@ func (p *ProtocolObject) msgLoop() error {
 					}
 
 					// 序号
-					acceptSock.TCPSock.Ack = tcp.Ack
-					acceptSock.TCPSock.Seq = tcp.Seq
+					acceptSock.TCPSock.RecvedAckNum = tcp.Ack
+					acceptSock.TCPSock.RecvedSeqNum = tcp.Seq
 					// 状态
 					acceptSock.TCPSock.FIN = tcp.FIN
 					acceptSock.TCPSock.ACK = tcp.ACK
@@ -416,7 +413,8 @@ func (p *ProtocolObject) msgLoop() error {
 					acceptSock.TCPSock.RST = tcp.RST
 
 					acceptSock.Options = append(acceptSock.Options, tcp.Options...)
-					acceptSock.Payload = append(acceptSock.Payload, tcp.Payload...)
+					acceptSock.LenOfRecved = uint32(len(tcp.Payload)) // 接收数据的长度
+					acceptSock.RecvedPayload = append(acceptSock.RecvedPayload, tcp.Payload...)
 				case SocketType_DGRAM:
 					udplayer := packet.Layer(layers.LayerTypeUDP)
 					if udplayer == nil {
@@ -452,7 +450,7 @@ func (p *ProtocolObject) msgLoop() error {
 					acceptSock.LocalPort = uint16(udp.DstPort)
 					acceptSock.LocalMAC = append(acceptSock.LocalMAC, eth.DstMAC...)
 
-					acceptSock.Payload = append(acceptSock.Payload, udp.Payload...)
+					acceptSock.RecvedPayload = append(acceptSock.RecvedPayload, udp.Payload...)
 				}
 
 				// 临时测试，实际应用会转发消息到目的程序
@@ -548,13 +546,12 @@ func (p *ProtocolObject) SendSyn(s *Socket, payload []byte) error {
 		s.LocalPort,
 		s.RemotePort,
 		TCP_SIGNAL_SYN,
-		s.TCPSock.Ack,
-		s.TCPSock.Seq+1,
+		s.TCPSock.SeqNum,
+		s.TCPSock.AckNum,
 		options,
 		payload,
 		s.Handle.IsLoopback)
 	if err != nil {
-		log.Logger.Info("GenerateTCPPackage error")
 		return err
 	}
 
@@ -611,8 +608,8 @@ func (p *ProtocolObject) SendSynAck(s *Socket, payload []byte) error {
 		s.LocalPort,
 		s.RemotePort,
 		TCP_SIGNAL_ACK|TCP_SIGNAL_SYN,
-		s.TCPSock.Ack,
-		s.TCPSock.Seq+1,
+		s.TCPSock.SeqNum,
+		s.TCPSock.AckNum,
 		options,
 		payload,
 		s.Handle.IsLoopback)
@@ -657,15 +654,15 @@ func (p *ProtocolObject) SendAck(s *Socket, payload []byte) error {
 	}
 
 	// 根据当前的消息类型判断处理方式
-	sendBuf, err := GenerateTCPPackage(s.LocalIP,
-		s.LocalMAC,
-		s.RemoteIP,
-		s.Nexthop,
-		s.LocalPort,
-		s.RemotePort,
-		TCP_SIGNAL_ACK,
-		s.TCPSock.Ack,
-		s.TCPSock.Seq+1,
+	sendBuf, err := GenerateTCPPackage(s.LocalIP, // scrIP
+		s.LocalMAC,       // srcMAC
+		s.RemoteIP,       // dstIP
+		s.Nexthop,        // dstMAC
+		s.LocalPort,      // srcPort
+		s.RemotePort,     // dstPort
+		TCP_SIGNAL_ACK,   // Signal
+		s.TCPSock.SeqNum, // seq
+		s.TCPSock.AckNum, // ack
 		options,
 		payload,
 		s.Handle.IsLoopback)
@@ -711,8 +708,8 @@ func (p *ProtocolObject) SendPshAck(acceptSock *Socket, payload []byte) error {
 		acceptSock.LocalPort,
 		acceptSock.RemotePort,
 		TCP_SIGNAL_ACK|TCP_SIGNAL_PSH,
-		acceptSock.TCPSock.Ack,
-		acceptSock.TCPSock.Seq+1,
+		acceptSock.TCPSock.SeqNum,
+		acceptSock.TCPSock.AckNum,
 		options,
 		payload,
 		acceptSock.Handle.IsLoopback)
@@ -758,8 +755,8 @@ func (p *ProtocolObject) SendFinAck(s *Socket, payload []byte) error {
 		s.LocalPort,
 		s.RemotePort,
 		TCP_SIGNAL_ACK|TCP_SIGNAL_FIN,
-		s.TCPSock.Ack,
-		s.TCPSock.Seq+1,
+		s.TCPSock.SeqNum,
+		s.TCPSock.AckNum,
 		options,
 		payload,
 		s.Handle.IsLoopback)
@@ -833,6 +830,10 @@ func (p *ProtocolObject) protocolStackHandle(s *Socket) error {
 		sock, ok := p.IsInBufferSockets(s)
 		if ok {
 			pSock = sock
+			pSock.RecvedSeqNum = s.RecvedSeqNum
+			pSock.RecvedAckNum = s.RecvedAckNum
+			pSock.LenOfRecved = s.LenOfRecved
+			pSock.RecvedPayload = append(pSock.RecvedPayload, s.RecvedPayload...)
 		} else {
 			pSock = s
 		}
@@ -842,51 +843,54 @@ func (p *ProtocolObject) protocolStackHandle(s *Socket) error {
 		case TCP_SIGNAL_SYN:
 			if !ok {
 				p.Append(pSock)
+				pSock.UpdateNum()
 				p.SendSynAck(pSock, nil)
-				pSock.Seq++
+				pSock.PreLenOfSent = 0
 				pSock.TCPSock.Status = TCP_SYN_RECV
 			}
 		case TCP_SIGNAL_SYN | TCP_SIGNAL_ACK:
 			if !ok {
 				p.Append(pSock)
+				pSock.UpdateNum()
 				p.SendAck(pSock, nil)
-				pSock.Seq++
+				pSock.PreLenOfSent = 0
 				pSock.TCPSock.Status = TCP_ESTABLISHED
 			} else {
 				if sock.TCPSock.Status == TCP_SYN_SENT {
 					p.SendAck(pSock, nil)
-					pSock.Seq++
 					pSock.TCPSock.Status = TCP_ESTABLISHED
 				}
 			}
 		case TCP_SIGNAL_FIN | TCP_SIGNAL_ACK:
 			if ok {
+				pSock.UpdateNum()
 				if pSock.IsSupportTimestamp {
 					pSock.TsEcho = s.GetTsEcho() // bigendian
 				}
 				if pSock.TCPSock.Status == TCP_ESTABLISHED {
-					pSock.TCPSock.Status = TCP_CLOSE_WAIT
 					p.SendAck(pSock, nil)
-					pSock.Seq++
+					pSock.PreLenOfSent = 0
+					pSock.TCPSock.Status = TCP_CLOSE_WAIT
 				}
 			}
 		case TCP_SIGNAL_PSH | TCP_SIGNAL_ACK:
 			if ok {
+				pSock.UpdateNum()
 				if sock.TCPSock.Status == TCP_ESTABLISHED {
 					// 处理数据
-					if len(s.Payload) > 0 {
-						sock.databuf.Write(s.Payload, len(s.Payload))
+					if len(s.RecvedPayload) > 0 {
+						sock.databuf.Write(s.RecvedPayload, len(s.RecvedPayload))
 						sock.msg <- SocketMsg_RecvData
 					}
-					pSock.Seq++
 					// 已经建立了连接
 					p.SendAck(sock, nil)
+
 					// 数据
 				}
 			}
-			// p.SendAck(acceptSock, nil)
 		case TCP_SIGNAL_ACK:
 			if ok {
+				pSock.UpdateNum()
 				if sock.TCPSock.Status == TCP_SYN_RECV {
 					// 已经发送的Syn+Ack
 					sock.TCPSock.Status = TCP_ESTABLISHED
@@ -894,7 +898,7 @@ func (p *ProtocolObject) protocolStackHandle(s *Socket) error {
 					p.accpetStack.Push(pSock)
 				} else if sock.TCPSock.Status == TCP_ESTABLISHED {
 					// 已经建立连接，则可能接收到数据
-					sock.databuf.Write(s.Payload, len(s.Payload))
+					sock.databuf.Write(s.RecvedPayload, len(s.RecvedPayload))
 					sock.msg <- SocketMsg_RecvData
 				} else if sock.TCPSock.Status == TCP_FIN_WAIT1 {
 					sock.TCPSock.Status = TCP_FIN_WAIT2
@@ -1006,7 +1010,7 @@ loop:
 	case msg := <-s.msg:
 		switch msg {
 		case SocketMsg_RecvData:
-			*result = append(*result, s.Payload...)
+			*result = append(*result, s.RecvedPayload...)
 			break loop
 		case SocketMsg_Closed:
 			return 0
@@ -1022,6 +1026,7 @@ func (p *ProtocolObject) Send(s *Socket, payload []byte) int {
 
 	if s.SocketType == SocketType_STREAM && s.TCPSock.Status == TCP_ESTABLISHED {
 		p.SendPshAck(s, payload)
+		s.PreLenOfSent = uint32(len(payload))
 	} else if s.SocketType == SocketType_DGRAM {
 		p.Sendto(s, payload)
 	}
