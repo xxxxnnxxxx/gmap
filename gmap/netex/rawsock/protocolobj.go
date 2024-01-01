@@ -830,77 +830,63 @@ func (p *ProtocolObject) protocolStackHandle(s *Socket) error {
 			tcp_signal |= TCP_SIGNAL_PSH
 		}
 
+		sock, ok := p.IsInBufferSockets(s)
+		if ok {
+			pSock = sock
+		} else {
+			pSock = s
+		}
+		pSock.Lock.Lock()
+		defer pSock.Lock.Unlock()
 		switch tcp_signal {
 		case TCP_SIGNAL_SYN:
-			_, ok := p.IsInBufferSockets(s)
 			if !ok {
-				pSock = s // 加入的Socket结构地址
 				p.Append(pSock)
 				p.SendSynAck(pSock, nil)
-				pSock.Lock.Lock()
 				pSock.Seq++
 				pSock.TCPSock.Status = TCP_SYN_RECV
-				pSock.Lock.Unlock()
-			} else {
-
 			}
 		case TCP_SIGNAL_SYN | TCP_SIGNAL_ACK:
-			sock, ok := p.IsInBufferSockets(s)
 			if !ok {
-				pSock = s // 加入的Socket结构地址
 				p.Append(pSock)
 				p.SendAck(pSock, nil)
-				pSock.Lock.Lock()
+				pSock.Seq++
 				pSock.TCPSock.Status = TCP_ESTABLISHED
-				pSock.Lock.Unlock()
 			} else {
 				if sock.TCPSock.Status == TCP_SYN_SENT {
-					pSock = sock
 					p.SendAck(pSock, nil)
-					pSock.Lock.Lock()
+					pSock.Seq++
 					pSock.TCPSock.Status = TCP_ESTABLISHED
-					pSock.Lock.Unlock()
 				}
 			}
 		case TCP_SIGNAL_FIN | TCP_SIGNAL_ACK:
-			sock, ok := p.IsInBufferSockets(s)
 			if ok {
-				pSock = sock // 加入的Socket结构地址
-				pSock.Lock.Lock()
 				if pSock.IsSupportTimestamp {
 					pSock.TsEcho = s.GetTsEcho() // bigendian
 				}
 				if pSock.TCPSock.Status == TCP_ESTABLISHED {
 					pSock.TCPSock.Status = TCP_CLOSE_WAIT
 					p.SendAck(pSock, nil)
+					pSock.Seq++
 				}
-				pSock.Lock.Unlock()
 			}
-			p.SendAck(s, nil)
 		case TCP_SIGNAL_PSH | TCP_SIGNAL_ACK:
-			sock, ok := p.IsInBufferSockets(s)
 			if ok {
-				pSock = sock // 加入的Socket结构地址
-				pSock.Lock.Lock()
 				if sock.TCPSock.Status == TCP_ESTABLISHED {
 					// 处理数据
 					if len(s.Payload) > 0 {
 						sock.databuf.Write(s.Payload, len(s.Payload))
 						sock.msg <- SocketMsg_RecvData
 					}
+					pSock.Seq++
 					// 已经建立了连接
 					p.SendAck(sock, nil)
 					// 数据
 				}
-				pSock.Lock.Unlock()
 			}
 			// p.SendAck(acceptSock, nil)
 		case TCP_SIGNAL_ACK:
-			//
-			sock, ok := p.IsInBufferSockets(s)
 			if ok {
-				pSock = sock // 加入的Socket结构地址
-				pSock.Lock.Lock()
 				if sock.TCPSock.Status == TCP_SYN_RECV {
 					// 已经发送的Syn+Ack
 					sock.TCPSock.Status = TCP_ESTABLISHED
@@ -917,7 +903,6 @@ func (p *ProtocolObject) protocolStackHandle(s *Socket) error {
 					// 启动定时器
 					TimerCall(0, 2*MSL, func() {
 						if s.Status == TCP_TIME_WAIT {
-							pSock.Lock.Unlock()
 							return
 						} else if s.Status == TCP_FIN_WAIT2 {
 							s.Status = TCP_CLOSE
@@ -928,7 +913,6 @@ func (p *ProtocolObject) protocolStackHandle(s *Socket) error {
 				} else if sock.TCPSock.Status == TCP_LAST_ACK {
 					sock.TCPSock.Status = TCP_CLOSE
 				}
-				pSock.Lock.Unlock()
 			}
 		}
 	} else if s.SocketType == SocketType_DGRAM {
