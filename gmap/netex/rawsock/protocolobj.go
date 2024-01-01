@@ -23,24 +23,30 @@ const (
 )
 
 const (
-	// InterfaceFlagUp 表示接口是启用的。
-	InterfaceFlagUp uint32 = 1 << iota
-	// InterfaceFlagBroadcast 表示接口支持广播。
-	InterfaceFlagBroadcast
-	// InterfaceFlagLoopback 表示接口是回环接口。
-	InterfaceFlagLoopback
-	// InterfaceFlagPointToPoint 表示接口是点对点连接。
-	InterfaceFlagPointToPoint
-	// InterfaceFlagMulticast 表示接口支持多播。
-	InterfaceFlagMulticast
+	PCAP_IF_LOOPBACK                         = 0x00000001 /* interface is loopback */
+	PCAP_IF_UP                               = 0x00000002 /* interface is up */
+	PCAP_IF_RUNNING                          = 0x00000004 /* interface is running */
+	PCAP_IF_WIRELESS                         = 0x00000008 /* interface is wireless (*NOT* necessarily Wi-Fi!) */
+	PCAP_IF_CONNECTION_STATUS                = 0x00000030 /* connection status: */
+	PCAP_IF_CONNECTION_STATUS_UNKNOWN        = 0x00000000 /* unknown */
+	PCAP_IF_CONNECTION_STATUS_CONNECTED      = 0x00000010 /* connected */
+	PCAP_IF_CONNECTION_STATUS_DISCONNECTED   = 0x00000020 /* disconnected */
+	PCAP_IF_CONNECTION_STATUS_NOT_APPLICABLE = 0x00000030 /* not applicable */
 )
 
+type AdapterInfo struct {
+	Flag       uint32 // 接口类型
+	IsLoopback bool
+	DevName    string
+	MAC        net.HardwareAddr
+	Addrs      []device.IPAddress
+}
+
 type ProtocolObject struct {
-	DevHandle     *device.DeviceHandle
-	Ifs           []pcap.Interface      // 所有的接口信息
-	II            *device.InterfaceInfo // 网络接口信息
-	SocketType    int                   // 数据类型
-	deviceLnkName string
+	SocketType int // 数据类型
+	DevHandle  *device.DeviceHandle
+	Ifs        []pcap.Interface // 所有的接口信息
+	AdapterInfo
 
 	Wg         sync.WaitGroup
 	Timeout    time.Duration // 设置监听时间 Listen的时间
@@ -49,7 +55,7 @@ type ProtocolObject struct {
 	IsAsServer bool                        // 是否作为服务
 
 	//
-	OriginSocket *Socket // 初始化本地信息
+	originSocket *Socket // 初始化本地信息
 
 	lock_SocketList sync.Mutex
 	TCPSocketsList  map[string]*Socket // 保存所有的连接的socket
@@ -65,12 +71,13 @@ func NewProtocolObjectByLnkName(socketType int) *ProtocolObject {
 		DevHandle:      device.NewDeviceHandle(),
 		Ifs:            make([]pcap.Interface, 0),
 		Done:           make(chan struct{}),
-		OriginSocket:   nil,
+		originSocket:   nil,
 		TCPSocketsList: make(map[string]*Socket),
 		UDPSocketsList: make(map[string]*Socket),
 		accpetStack:    common.NewStack(),
 	}
-
+	instance.AdapterInfo.Addrs = make([]device.IPAddress, 0)
+	instance.AdapterInfo.MAC = make(net.HardwareAddr, 0)
 	return instance
 }
 
@@ -113,6 +120,7 @@ func (p *ProtocolObject) InitAdapter(iftype int, param string) error {
 			if item.Name == param {
 				deviceLnkName = param
 				flag = item.Flags
+				IPs = append(IPs, item.Addresses...)
 			}
 
 		}
@@ -122,21 +130,13 @@ func (p *ProtocolObject) InitAdapter(iftype int, param string) error {
 		return errors.New("not found adapter")
 	}
 
-	if flag&InterfaceFlagUp == 0 {
+	if flag&PCAP_IF_UP == 0 {
 		return errors.New("invailed adapter")
 	}
 
-	// 填充当前接口信息
-	if p.II == nil {
-		p.II = device.NewInterfaceInfo()
-	}
-
-	if flag&InterfaceFlagLoopback > 0 {
-		p.II.IfType |= device.IF_TYPE_SOFTWARE_LOOPBACK
-	}
-
-	if flag&InterfaceFlagUp > 0 {
-		p.II.OperStatus = 1 // up state
+	p.AdapterInfo.Flag = flag
+	if flag&PCAP_IF_LOOPBACK > 0 {
+		p.AdapterInfo.IsLoopback = true
 	}
 
 	for _, item := range IPs {
@@ -147,19 +147,19 @@ func (p *ProtocolObject) InitAdapter(iftype int, param string) error {
 		}
 		ipa.IP = netipAddr
 		ipa.NetmaskBits, _ = item.Netmask.Size()
-		p.II.Addrs = append(p.II.Addrs, ipa)
+		p.AdapterInfo.Addrs = append(p.AdapterInfo.Addrs, ipa)
 	}
 
-	p.II.DevLinkSymbol = deviceLnkName
+	p.AdapterInfo.DevName = deviceLnkName
 
 	// 打开设备
-	if flag&InterfaceFlagLoopback > 0 {
+	if flag&PCAP_IF_LOOPBACK > 0 {
 		p.DevHandle.IsLoopback = true
 	} else {
 		p.DevHandle.IsLoopback = false
 	}
 
-	err = p.DevHandle.Open(p.deviceLnkName)
+	err = p.DevHandle.Open(p.AdapterInfo.DevName)
 	if err != nil {
 		return err
 	}
@@ -171,16 +171,64 @@ func (p *ProtocolObject) InitAdapter(iftype int, param string) error {
 		packetSource.Lazy = true
 		packetSource.NoCopy = false
 		packetSource.DecodeStreamsAsDatagrams = true
-		packet, err := packetSource.NextPacket()
-		if err != nil {
-			return err
+		for {
+			stream, err := packetSource.NextPacket()
+			if err == io.EOF {
+				continue
+			}
+			packet := stream
+			if packet == nil {
+				continue
+			}
+			var iplayer gopacket.Layer
+			// var ip net.IPAddr
+			var srcIP net.IP
+			var dstIP net.IP
+			iplayer = packet.Layer(layers.LayerTypeIPv4)
+			if iplayer == nil {
+				iplayer = packet.Layer(layers.LayerTypeIPv6)
+				if iplayer == nil {
+					continue
+				}
+				ip, ok := iplayer.(*layers.IPv6)
+				if !ok {
+					continue
+				}
+				srcIP = ip.SrcIP
+				dstIP = ip.DstIP
+			} else {
+				ip, ok := iplayer.(*layers.IPv4)
+				if !ok {
+					continue
+				}
+				srcIP = ip.SrcIP
+				dstIP = ip.DstIP
+			}
+
+			var eth *layers.Ethernet
+			ethLayer := packet.Layer(layers.LayerTypeEthernet)
+			if ethLayer != nil {
+				var ok bool
+				eth, ok = ethLayer.(*layers.Ethernet)
+				if !ok {
+					continue
+				}
+			} else {
+				continue
+			}
+
+			if dstIP.Equal(net.ParseIP(p.AdapterInfo.Addrs[0].IP.String())) {
+				p.AdapterInfo.MAC = eth.DstMAC
+				break
+			} else if srcIP.Equal(net.ParseIP(p.AdapterInfo.Addrs[0].IP.String())) {
+				p.AdapterInfo.MAC = eth.SrcMAC
+				break
+			}
+
 		}
-		// 从数据包中获取源 MAC 地址
-		macLayer := packet.LinkLayer()
-		if macLayer == nil {
-			p.DevHandle.Handle.Close()
-			return errors.New("obtain mac address failed")
-		}
+
+		fmt.Println(p.AdapterInfo.MAC.String())
+
 	} else { // 在回环的情况下，不需要特别获取MAC地址,因为栈帧不存在以太网层
 
 	}
@@ -188,19 +236,21 @@ func (p *ProtocolObject) InitAdapter(iftype int, param string) error {
 	return nil
 }
 
-func (p *ProtocolObject) InitOriginSocket(port uint16) {
-	p.OriginSocket = NewSocket()
-	p.OriginSocket.SocketType = p.SocketType
-	p.OriginSocket.Handle = p.DevHandle
-	p.OriginSocket.Nexthop = p.II.MAC
+func (p *ProtocolObject) BindSocket(port uint16) {
+	p.originSocket = NewSocket()
+	p.originSocket.SocketType = p.SocketType
+	p.originSocket.Handle = p.DevHandle
+	p.originSocket.LocalIP = net.ParseIP(p.AdapterInfo.Addrs[0].IP.String())
+	p.originSocket.LocalMAC = p.AdapterInfo.MAC // 赋值原视频
 	if port == 0 {
-		p.OriginSocket.LocalIP = net.ParseIP(p.II.Addrs[0].IP.String())
-		p.OriginSocket.LocalPort = uint16(GeneratePort())
+		p.originSocket.LocalPort = uint16(GeneratePort())
+	} else {
+		p.originSocket.LocalPort = port
 	}
 }
 
 func (p *ProtocolObject) Startup() error {
-	if p.OriginSocket == nil {
+	if p.originSocket == nil {
 		return errors.New("not initialize originsocket")
 	}
 
@@ -214,7 +264,7 @@ func (p *ProtocolObject) CloseDevice() {
 	}
 }
 
-func (p *ProtocolObject) CloseAllOfConnectedTCPSocket() {
+func (p *ProtocolObject) CloseAllofSockets() {
 	for _, socket := range p.TCPSocketsList {
 		p.Close(socket, nil)
 	}
@@ -299,7 +349,20 @@ func (p *ProtocolObject) msgLoop() error {
 						return
 					}
 					// 如果目的不是本地的端口和本地的IP则直接返回
-					if uint16(tcp.DstPort) != p.OriginSocket.LocalPort && !dstIP.Equal(p.OriginSocket.LocalIP) {
+					if uint16(tcp.DstPort) != p.originSocket.LocalPort && !dstIP.Equal(p.originSocket.LocalIP) {
+						return
+					}
+
+					// 这个地方
+					p.originSocket.Lock.Lock()
+					if p.originSocket.RemoteIP != nil && p.originSocket.RemotePort > 0 {
+						if uint16(tcp.SrcPort) != p.originSocket.RemotePort && !dstIP.Equal(p.originSocket.RemoteIP) {
+							p.originSocket.Lock.Unlock()
+							return
+						}
+						p.originSocket.Lock.Unlock()
+					} else {
+						p.originSocket.Lock.Unlock()
 						return
 					}
 
@@ -365,7 +428,7 @@ func (p *ProtocolObject) msgLoop() error {
 						return
 					}
 
-					if uint16(udp.DstPort) != p.OriginSocket.LocalPort && !dstIP.Equal(p.OriginSocket.LocalIP) {
+					if uint16(udp.DstPort) != p.originSocket.LocalPort && !dstIP.Equal(p.originSocket.LocalIP) {
 						return
 					}
 
@@ -393,11 +456,12 @@ func (p *ProtocolObject) msgLoop() error {
 				}
 
 				// 临时测试，实际应用会转发消息到目的程序
-				if p.Callback != nil {
-					go p.Callback(acceptSock, nil)
-				} else {
-					go p.protocolStackHandle(acceptSock)
-				}
+				//if p.Callback != nil {
+				//	go p.Callback(acceptSock, nil)
+				//} else {
+				//	go p.protocolStackHandle(acceptSock)
+				//}
+				p.protocolStackHandle(acceptSock)
 			}()
 		}
 	}(&p.Wg)
@@ -441,26 +505,26 @@ func (p *ProtocolObject) SendSyn(s *Socket, payload []byte) error {
 	option_mss := layers.TCPOption{
 		OptionType:   layers.TCPOptionKindMSS,
 		OptionLength: 4,
-		OptionData:   []byte{0x05, 0x04},
+		OptionData:   []byte{0x05, 0xb4},
 	}
 
-	option_scale := layers.TCPOption{
-		OptionType:   layers.TCPOptionKindWindowScale,
-		OptionLength: 3,
-		OptionData:   []byte{0x08},
-	}
-
-	option_nop := layers.TCPOption{
-		OptionType: layers.TCPOptionKindNop,
-	}
-
-	option_sack_permitted := layers.TCPOption{
-		OptionType:   layers.TCPOptionKindSACKPermitted,
-		OptionLength: 2,
-	}
+	//option_scale := layers.TCPOption{
+	//	OptionType:   layers.TCPOptionKindWindowScale,
+	//	OptionLength: 3,
+	//	OptionData:   []byte{0x08},
+	//}
+	//
+	//option_nop := layers.TCPOption{
+	//	OptionType: layers.TCPOptionKindNop,
+	//}
+	//
+	//option_sack_permitted := layers.TCPOption{
+	//	OptionType:   layers.TCPOptionKindSACKPermitted,
+	//	OptionLength: 2,
+	//}
 
 	options := make([]layers.TCPOption, 0)
-	options = append(options, option_mss, option_scale, option_nop, option_sack_permitted)
+	options = append(options, option_mss)
 
 	if s.IsSupportTimestamp {
 		buf := make([]byte, 4)
@@ -771,35 +835,53 @@ func (p *ProtocolObject) protocolStackHandle(s *Socket) error {
 			_, ok := p.IsInBufferSockets(s)
 			if !ok {
 				pSock = s // 加入的Socket结构地址
-				p.Append(s)
-				p.SendSynAck(s, nil)
-				s.TCPSock.Status = TCP_SYN_RECV
+				p.Append(pSock)
+				p.SendSynAck(pSock, nil)
+				pSock.Lock.Lock()
+				pSock.Seq++
+				pSock.TCPSock.Status = TCP_SYN_RECV
+				pSock.Lock.Unlock()
+			} else {
+
 			}
 		case TCP_SIGNAL_SYN | TCP_SIGNAL_ACK:
-			_, ok := p.IsInBufferSockets(s)
+			sock, ok := p.IsInBufferSockets(s)
 			if !ok {
 				pSock = s // 加入的Socket结构地址
-				p.Append(s)
-				p.SendAck(s, nil)
-				s.TCPSock.Status = TCP_ESTABLISHED
+				p.Append(pSock)
+				p.SendAck(pSock, nil)
+				pSock.Lock.Lock()
+				pSock.TCPSock.Status = TCP_ESTABLISHED
+				pSock.Lock.Unlock()
+			} else {
+				if sock.TCPSock.Status == TCP_SYN_SENT {
+					pSock = sock
+					p.SendAck(pSock, nil)
+					pSock.Lock.Lock()
+					pSock.TCPSock.Status = TCP_ESTABLISHED
+					pSock.Lock.Unlock()
+				}
 			}
 		case TCP_SIGNAL_FIN | TCP_SIGNAL_ACK:
 			sock, ok := p.IsInBufferSockets(s)
 			if ok {
 				pSock = sock // 加入的Socket结构地址
-				if sock.IsSupportTimestamp {
-					sock.TsEcho = s.GetTsEcho() // bigendian
+				pSock.Lock.Lock()
+				if pSock.IsSupportTimestamp {
+					pSock.TsEcho = s.GetTsEcho() // bigendian
 				}
-				if sock.TCPSock.Status == TCP_ESTABLISHED {
-					sock.TCPSock.Status = TCP_CLOSE_WAIT
-					p.SendAck(sock, nil)
+				if pSock.TCPSock.Status == TCP_ESTABLISHED {
+					pSock.TCPSock.Status = TCP_CLOSE_WAIT
+					p.SendAck(pSock, nil)
 				}
+				pSock.Lock.Unlock()
 			}
 			p.SendAck(s, nil)
 		case TCP_SIGNAL_PSH | TCP_SIGNAL_ACK:
 			sock, ok := p.IsInBufferSockets(s)
 			if ok {
 				pSock = sock // 加入的Socket结构地址
+				pSock.Lock.Lock()
 				if sock.TCPSock.Status == TCP_ESTABLISHED {
 					// 处理数据
 					if len(s.Payload) > 0 {
@@ -809,8 +891,8 @@ func (p *ProtocolObject) protocolStackHandle(s *Socket) error {
 					// 已经建立了连接
 					p.SendAck(sock, nil)
 					// 数据
-
 				}
+				pSock.Lock.Unlock()
 			}
 			// p.SendAck(acceptSock, nil)
 		case TCP_SIGNAL_ACK:
@@ -818,6 +900,7 @@ func (p *ProtocolObject) protocolStackHandle(s *Socket) error {
 			sock, ok := p.IsInBufferSockets(s)
 			if ok {
 				pSock = sock // 加入的Socket结构地址
+				pSock.Lock.Lock()
 				if sock.TCPSock.Status == TCP_SYN_RECV {
 					// 已经发送的Syn+Ack
 					sock.TCPSock.Status = TCP_ESTABLISHED
@@ -834,6 +917,7 @@ func (p *ProtocolObject) protocolStackHandle(s *Socket) error {
 					// 启动定时器
 					TimerCall(0, 2*MSL, func() {
 						if s.Status == TCP_TIME_WAIT {
+							pSock.Lock.Unlock()
 							return
 						} else if s.Status == TCP_FIN_WAIT2 {
 							s.Status = TCP_CLOSE
@@ -844,14 +928,11 @@ func (p *ProtocolObject) protocolStackHandle(s *Socket) error {
 				} else if sock.TCPSock.Status == TCP_LAST_ACK {
 					sock.TCPSock.Status = TCP_CLOSE
 				}
+				pSock.Lock.Unlock()
 			}
 		}
 	} else if s.SocketType == SocketType_DGRAM {
-		//if len(s.Payload) > 0 {
-		//	go func() {
-		//		p.AcceptSocket <- s
-		//	}()
-		//}
+
 	}
 
 	// 触发通知回调
@@ -873,36 +954,42 @@ func (p *ProtocolObject) Wait() {
 // -----------------
 
 func (p *ProtocolObject) Connect(targetIP net.IP, targetPort uint16, nexthopMAC net.HardwareAddr) (*Socket, error) {
+	if p.originSocket == nil {
+		return nil, errors.New("not bind socket")
+	}
+
 	if p.SocketType != SocketType_STREAM {
 		return nil, errors.New("not TCP_STREAM")
 	}
 	wg := new(sync.WaitGroup)
 	wg.Add(1)
-	p.OriginSocket.Lock.Lock()
-	p.OriginSocket.RemoteIP = targetIP
-	p.OriginSocket.RemotePort = targetPort
-	p.OriginSocket.Nexthop = append(p.OriginSocket.Nexthop, nexthopMAC...)
-	p.OriginSocket.IsTriggerNotify.Store(true)
-	p.OriginSocket.NotifyCallback = func() {
-		isNotifiy := p.OriginSocket.IsTriggerNotify.Load()
-		if p.OriginSocket.Status == TCP_ESTABLISHED && isNotifiy {
-			p.OriginSocket.IsTriggerNotify.Store(false)
+	p.originSocket.Lock.Lock()
+	p.originSocket.RemoteIP = targetIP
+	p.originSocket.RemotePort = targetPort
+	p.originSocket.Nexthop = append(p.originSocket.Nexthop, nexthopMAC...)
+	p.originSocket.IsTriggerNotify.Store(true)
+	p.originSocket.NotifyCallback = func() {
+		isNotifiy := p.originSocket.IsTriggerNotify.Load()
+		if p.originSocket.Status == TCP_ESTABLISHED && isNotifiy {
+			p.originSocket.IsTriggerNotify.Store(false)
 			wg.Done()
 		}
 	}
-	p.OriginSocket.Lock.Unlock()
+	p.originSocket.Lock.Unlock()
 
 	// 压入列表
 	p.lock_SocketList.Lock()
-	flag := fmt.Sprintf("%v:%v", p.OriginSocket.RemoteIP.String(), p.OriginSocket.RemotePort)
-	p.TCPSocketsList[flag] = p.OriginSocket
+	flag := fmt.Sprintf("%v:%v", p.originSocket.RemoteIP.String(), p.originSocket.RemotePort)
+	p.TCPSocketsList[flag] = p.originSocket
 	p.lock_SocketList.Unlock()
 	// 设置
-
-	err := p.SendSyn(p.OriginSocket, nil)
+	p.originSocket.Lock.Lock()
+	err := p.SendSyn(p.originSocket, nil)
 	if err != nil {
 		return nil, err
 	}
+	p.originSocket.TCPSock.Status = TCP_SYN_SENT
+	p.originSocket.Lock.Unlock()
 
 	wg.Wait() // 等待连接完成
 
