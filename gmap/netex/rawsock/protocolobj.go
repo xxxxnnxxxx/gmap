@@ -226,9 +226,6 @@ func (p *ProtocolObject) InitAdapter(iftype int, param string) error {
 			}
 
 		}
-
-		fmt.Println(p.AdapterInfo.MAC.String())
-
 	} else { // 在回环的情况下，不需要特别获取MAC地址,因为栈帧不存在以太网层
 
 	}
@@ -402,11 +399,12 @@ func (p *ProtocolObject) msgLoop() error {
 			if err == io.EOF {
 				return
 			}
-			packet := stream
-			if packet == nil {
-				continue
-			}
 			func() {
+				//packet := gopacket.NewPacket(stream.Data(), p.DevHandle.Handle.LinkType(), gopacket.Default)
+				packet := stream
+				if packet == nil {
+					return
+				}
 				var iplayer gopacket.Layer
 				// var ip net.IPAddr
 				var srcIP net.IP
@@ -446,21 +444,18 @@ func (p *ProtocolObject) msgLoop() error {
 					if !ok {
 						return
 					}
+
 					// 如果目的不是本地的端口和本地的IP则直接返回
-					if uint16(tcp.DstPort) != p.originSocket.LocalPort && !dstIP.Equal(p.originSocket.LocalIP) {
+					if uint16(tcp.DstPort) != p.originSocket.LocalPort || !dstIP.Equal(p.originSocket.LocalIP) {
 						return
 					}
 
 					// 这个地方
-					p.originSocket.Lock.Lock()
 					if p.originSocket.RemoteIP != nil && p.originSocket.RemotePort > 0 {
 						if uint16(tcp.SrcPort) != p.originSocket.RemotePort && !dstIP.Equal(p.originSocket.RemoteIP) {
-							p.originSocket.Lock.Unlock()
 							return
 						}
-						p.originSocket.Lock.Unlock()
 					} else {
-						p.originSocket.Lock.Unlock()
 						return
 					}
 
@@ -509,13 +504,6 @@ func (p *ProtocolObject) msgLoop() error {
 					acceptSock.TCPSock.NS = tcp.NS
 					acceptSock.TCPSock.URG = tcp.URG
 					acceptSock.TCPSock.RST = tcp.RST
-
-					if acceptSock.FIN {
-						fmt.Println("----------------FIN")
-					} else if acceptSock.PSH {
-						fmt.Println("------------------PSH")
-					}
-
 					acceptSock.Options = append(acceptSock.Options, tcp.Options...)
 					acceptSock.LenOfRecved = uint32(len(tcp.Payload)) // 接收数据的长度
 					acceptSock.RecvedPayload = append(acceptSock.RecvedPayload, tcp.Payload...)
@@ -627,6 +615,7 @@ func (p *ProtocolObject) protocolStackHandle(s *Socket) error {
 		} else {
 			pSock = s
 		}
+
 		pSock.Lock.Lock()
 		defer pSock.Lock.Unlock()
 
@@ -705,16 +694,16 @@ func (p *ProtocolObject) protocolStackHandle(s *Socket) error {
 				}
 			}
 		}
+
+		// 触发通知回调
+		if pSock != nil {
+			isNotify := pSock.IsTriggerNotify.Load()
+			if pSock.NotifyCallback != nil && isNotify {
+				pSock.NotifyCallback()
+			}
+		}
 	} else if pSock.SocketType == SocketType_DGRAM {
 
-	}
-
-	// 触发通知回调
-	if pSock != nil {
-		isNotify := pSock.IsTriggerNotify.Load()
-		if pSock.NotifyCallback != nil && isNotify {
-			pSock.NotifyCallback()
-		}
 	}
 
 	return nil
