@@ -2,7 +2,6 @@ package rawsock
 
 import (
 	"Gmap/gmap/common"
-	"Gmap/gmap/log"
 	"Gmap/gmap/netex/device"
 	"encoding/binary"
 	"errors"
@@ -13,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/netip"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -64,7 +64,7 @@ type ProtocolObject struct {
 	accpetStack *common.Stack
 }
 
-func NewProtocolObjectByLnkName(socketType int) *ProtocolObject {
+func NewProtocolObject(socketType int) *ProtocolObject {
 
 	instance := &ProtocolObject{
 		SocketType:     socketType,
@@ -242,6 +242,7 @@ func (p *ProtocolObject) BindSocket(port uint16) {
 	p.originSocket.Handle = p.DevHandle
 	p.originSocket.LocalIP = net.ParseIP(p.AdapterInfo.Addrs[0].IP.String())
 	p.originSocket.LocalMAC = p.AdapterInfo.MAC // 赋值原视频
+	p.originSocket.SeqNum = generateRandowSeq()
 	if port == 0 {
 		p.originSocket.LocalPort = uint16(GeneratePort())
 	} else {
@@ -287,6 +288,103 @@ func (p *ProtocolObject) sendBuffer(handle *device.DeviceHandle, bytes []byte) e
 	return device.SendBuf(handle.Handle, bytes)
 }
 
+func (p *ProtocolObject) sendTCPPacket(s *Socket, payload []byte, signal int) error {
+	if s.SocketType != SocketType_STREAM {
+		return errors.New("not a tcp")
+	}
+
+	options := make([]layers.TCPOption, 0)
+	switch signal {
+	case TCP_SIGNAL_SYN:
+		option_mss := layers.TCPOption{
+			OptionType:   layers.TCPOptionKindMSS,
+			OptionLength: 4,
+			OptionData:   []byte{0x05, 0xb4},
+		}
+		options = append(options, option_mss)
+	default:
+		option_nop := layers.TCPOption{
+			OptionType: layers.TCPOptionKindNop,
+		}
+
+		option_nop2 := layers.TCPOption{
+			OptionType: layers.TCPOptionKindNop,
+		}
+		options = append(options, option_nop, option_nop2)
+	}
+
+	if s.IsSupportTimestamp {
+		buf := make([]byte, 4)
+		binary.BigEndian.PutUint32(buf, s.TsEcho)
+		option_timstamp := layers.TCPOption{
+			OptionType:   layers.TCPOptionKindTimestamps,
+			OptionLength: 10,
+		}
+
+		option_timstamp.OptionData = append(option_timstamp.OptionData, getCurrentTimestampBigEndian()...)
+		option_timstamp.OptionData = append(option_timstamp.OptionData, buf...)
+
+		options = append(options, option_timstamp)
+	}
+
+	// 更新顺序号和确认号
+	s.UpdateNum()
+
+	// 根据当前的消息类型判断处理方式
+	sendBuf, err := GenerateTCPPackage(s.LocalIP,
+		s.LocalMAC,
+		s.RemoteIP,
+		s.Nexthop,
+		s.LocalPort,
+		s.RemotePort,
+		signal,
+		s.TCPSock.SeqNum,
+		s.TCPSock.AckNum,
+		options,
+		payload,
+		s.Handle.IsLoopback)
+	if err != nil {
+		return err
+	}
+
+	err = p.sendBuffer(s.Handle, sendBuf)
+	if err != nil {
+		return err
+	}
+	// 保存上一个信号
+	s.PreSignal = signal
+	//
+	s.PreLenOfSent = uint32(len(payload))
+	// 根据信号，改变套接字状态
+	switch signal {
+	case TCP_SIGNAL_SYN:
+		if s.TCPSock.Status == TS_UNKNOWN {
+			s.TCPSock.Status = TCP_SYN_SENT
+		}
+	case TCP_SIGNAL_SYN | TCP_SIGNAL_ACK:
+		if s.TCPSock.Status == TS_UNKNOWN {
+			s.TCPSock.Status = TCP_SYN_RECV
+		}
+	case TCP_SIGNAL_ACK:
+		if s.TCPSock.Status == TCP_SYN_SENT {
+			s.TCPSock.Status = TCP_ESTABLISHED
+		} else if s.TCPSock.Status == TCP_FIN_WAIT2 {
+			s.TCPSock.Status = TCP_TIME_WAIT
+		} else if s.TCPSock.Status == TCP_ESTABLISHED {
+			s.TCPSock.Status = TCP_CLOSE_WAIT
+		}
+	case TCP_SIGNAL_FIN:
+		// change status
+		if s.TCPSock.Status == TCP_CLOSE_WAIT {
+			s.TCPSock.Status = TCP_LAST_ACK
+		} else if s.TCPSock.Status == TCP_ESTABLISHED {
+			s.TCPSock.Status = TCP_FIN_WAIT1
+		}
+	}
+
+	return err
+}
+
 func (p *ProtocolObject) msgLoop() error {
 	if p.DevHandle == nil {
 		return errors.New("please open the device.")
@@ -308,7 +406,7 @@ func (p *ProtocolObject) msgLoop() error {
 			if packet == nil {
 				continue
 			}
-			go func() {
+			func() {
 				var iplayer gopacket.Layer
 				// var ip net.IPAddr
 				var srcIP net.IP
@@ -412,6 +510,12 @@ func (p *ProtocolObject) msgLoop() error {
 					acceptSock.TCPSock.URG = tcp.URG
 					acceptSock.TCPSock.RST = tcp.RST
 
+					if acceptSock.FIN {
+						fmt.Println("----------------FIN")
+					} else if acceptSock.PSH {
+						fmt.Println("------------------PSH")
+					}
+
 					acceptSock.Options = append(acceptSock.Options, tcp.Options...)
 					acceptSock.LenOfRecved = uint32(len(tcp.Payload)) // 接收数据的长度
 					acceptSock.RecvedPayload = append(acceptSock.RecvedPayload, tcp.Payload...)
@@ -453,326 +557,12 @@ func (p *ProtocolObject) msgLoop() error {
 					acceptSock.RecvedPayload = append(acceptSock.RecvedPayload, udp.Payload...)
 				}
 
-				// 临时测试，实际应用会转发消息到目的程序
-				//if p.Callback != nil {
-				//	go p.Callback(acceptSock, nil)
-				//} else {
-				//	go p.protocolStackHandle(acceptSock)
-				//}
-				p.protocolStackHandle(acceptSock)
+				go p.protocolStackHandle(acceptSock)
 			}()
 		}
 	}(&p.Wg)
 
 	return nil
-}
-
-func (p *ProtocolObject) Append(s *Socket) {
-	flag := fmt.Sprintf("%v:%v", s.RemoteIP.String(), s.RemotePort)
-	p.lock_SocketList.Lock()
-	if p.SocketType == SocketType_STREAM {
-		p.TCPSocketsList[flag] = s
-	} else if p.SocketType == SocketType_DGRAM {
-		p.TCPSocketsList[flag] = s
-	}
-	p.lock_SocketList.Unlock()
-}
-
-func (p *ProtocolObject) RemoveSockFromList(s *Socket) {
-	flag := fmt.Sprintf("%v:%v", s.RemoteIP.String(), s.RemotePort)
-	p.lock_SocketList.Lock()
-	if p.SocketType == SocketType_STREAM {
-		p.TCPSocketsList[flag] = nil
-	} else if p.SocketType == SocketType_DGRAM {
-		p.UDPSocketsList[flag] = nil
-	}
-	p.lock_SocketList.Unlock()
-}
-
-func (p *ProtocolObject) IsInBufferSockets(s *Socket) (*Socket, bool) {
-	flag := fmt.Sprintf("%v:%v", s.RemoteIP.String(), s.RemotePort)
-	ret, ok := p.TCPSocketsList[flag]
-	if ok {
-		return ret, true
-	}
-	return nil, false
-}
-
-// 发起连接
-func (p *ProtocolObject) SendSyn(s *Socket, payload []byte) error {
-	option_mss := layers.TCPOption{
-		OptionType:   layers.TCPOptionKindMSS,
-		OptionLength: 4,
-		OptionData:   []byte{0x05, 0xb4},
-	}
-
-	//option_scale := layers.TCPOption{
-	//	OptionType:   layers.TCPOptionKindWindowScale,
-	//	OptionLength: 3,
-	//	OptionData:   []byte{0x08},
-	//}
-	//
-	//option_nop := layers.TCPOption{
-	//	OptionType: layers.TCPOptionKindNop,
-	//}
-	//
-	//option_sack_permitted := layers.TCPOption{
-	//	OptionType:   layers.TCPOptionKindSACKPermitted,
-	//	OptionLength: 2,
-	//}
-
-	options := make([]layers.TCPOption, 0)
-	options = append(options, option_mss)
-
-	if s.IsSupportTimestamp {
-		buf := make([]byte, 4)
-		binary.BigEndian.PutUint32(buf, s.TsEcho)
-		option_timstamp := layers.TCPOption{
-			OptionType:   layers.TCPOptionKindTimestamps,
-			OptionLength: 10,
-		}
-
-		option_timstamp.OptionData = append(option_timstamp.OptionData, getCurrentTimestampBigEndian()...)
-		option_timstamp.OptionData = append(option_timstamp.OptionData, buf...)
-
-		options = append(options, option_timstamp)
-	}
-
-	// 根据当前的消息类型判断处理方式
-	sendBuf, err := GenerateTCPPackage(s.LocalIP,
-		s.LocalMAC,
-		s.RemoteIP,
-		s.Nexthop,
-		s.LocalPort,
-		s.RemotePort,
-		TCP_SIGNAL_SYN,
-		s.TCPSock.SeqNum,
-		s.TCPSock.AckNum,
-		options,
-		payload,
-		s.Handle.IsLoopback)
-	if err != nil {
-		return err
-	}
-
-	err = p.sendBuffer(s.Handle, sendBuf)
-	return err
-}
-
-// 连接反馈
-func (p *ProtocolObject) SendSynAck(s *Socket, payload []byte) error {
-
-	option_mss := layers.TCPOption{
-		OptionType:   layers.TCPOptionKindMSS,
-		OptionLength: 4,
-		OptionData:   []byte{0x05, 0x04},
-	}
-
-	option_scale := layers.TCPOption{
-		OptionType:   layers.TCPOptionKindWindowScale,
-		OptionLength: 3,
-		OptionData:   []byte{0x08},
-	}
-
-	option_nop := layers.TCPOption{
-		OptionType: layers.TCPOptionKindNop,
-	}
-
-	option_sack_permitted := layers.TCPOption{
-		OptionType:   layers.TCPOptionKindSACKPermitted,
-		OptionLength: 2,
-	}
-
-	options := make([]layers.TCPOption, 0)
-	options = append(options, option_mss, option_scale, option_nop, option_sack_permitted)
-
-	if s.IsSupportTimestamp {
-		buf := make([]byte, 4)
-		binary.BigEndian.PutUint32(buf, s.TsEcho)
-		option_timstamp := layers.TCPOption{
-			OptionType:   layers.TCPOptionKindTimestamps,
-			OptionLength: 10,
-		}
-
-		option_timstamp.OptionData = append(option_timstamp.OptionData, getCurrentTimestampBigEndian()...)
-		option_timstamp.OptionData = append(option_timstamp.OptionData, buf...)
-
-		options = append(options, option_timstamp)
-	}
-
-	// 根据当前的消息类型判断处理方式
-	sendBuf, err := GenerateTCPPackage(s.LocalIP,
-		s.LocalMAC,
-		s.RemoteIP,
-		s.Nexthop,
-		s.LocalPort,
-		s.RemotePort,
-		TCP_SIGNAL_ACK|TCP_SIGNAL_SYN,
-		s.TCPSock.SeqNum,
-		s.TCPSock.AckNum,
-		options,
-		payload,
-		s.Handle.IsLoopback)
-	if err != nil {
-		log.Logger.Info("GenerateTCPPackage error")
-		return err
-	}
-
-	err = p.sendBuffer(s.Handle, sendBuf)
-	return err
-}
-
-func (p *ProtocolObject) Sendto(s *Socket, payload []byte) error {
-	return nil
-}
-
-func (p *ProtocolObject) SendAck(s *Socket, payload []byte) error {
-
-	option_nop := layers.TCPOption{
-		OptionType: layers.TCPOptionKindNop,
-	}
-
-	option_nop2 := layers.TCPOption{
-		OptionType: layers.TCPOptionKindNop,
-	}
-
-	options := make([]layers.TCPOption, 0)
-	options = append(options, option_nop, option_nop2)
-
-	if s.IsSupportTimestamp {
-		buf := make([]byte, 4)
-		binary.BigEndian.PutUint32(buf, s.TsEcho)
-		option_timstamp := layers.TCPOption{
-			OptionType:   layers.TCPOptionKindTimestamps,
-			OptionLength: 10,
-		}
-
-		option_timstamp.OptionData = append(option_timstamp.OptionData, getCurrentTimestampBigEndian()...)
-		option_timstamp.OptionData = append(option_timstamp.OptionData, buf...)
-
-		options = append(options, option_timstamp)
-	}
-
-	// 根据当前的消息类型判断处理方式
-	sendBuf, err := GenerateTCPPackage(s.LocalIP, // scrIP
-		s.LocalMAC,       // srcMAC
-		s.RemoteIP,       // dstIP
-		s.Nexthop,        // dstMAC
-		s.LocalPort,      // srcPort
-		s.RemotePort,     // dstPort
-		TCP_SIGNAL_ACK,   // Signal
-		s.TCPSock.SeqNum, // seq
-		s.TCPSock.AckNum, // ack
-		options,
-		payload,
-		s.Handle.IsLoopback)
-	if err != nil {
-		return err
-	}
-
-	err = p.sendBuffer(s.Handle, sendBuf)
-	return err
-}
-
-func (p *ProtocolObject) SendPshAck(acceptSock *Socket, payload []byte) error {
-
-	option_nop := layers.TCPOption{
-		OptionType: layers.TCPOptionKindNop,
-	}
-
-	option_nop2 := layers.TCPOption{
-		OptionType: layers.TCPOptionKindNop,
-	}
-
-	options := make([]layers.TCPOption, 0)
-	options = append(options, option_nop, option_nop2)
-
-	if acceptSock.IsSupportTimestamp {
-		buf := make([]byte, 4)
-		binary.BigEndian.PutUint32(buf, acceptSock.TsEcho)
-		option_timstamp := layers.TCPOption{
-			OptionType:   layers.TCPOptionKindTimestamps,
-			OptionLength: 10,
-		}
-
-		option_timstamp.OptionData = append(option_timstamp.OptionData, getCurrentTimestampBigEndian()...)
-		option_timstamp.OptionData = append(option_timstamp.OptionData, buf...)
-
-		options = append(options, option_timstamp)
-	}
-	// 根据当前的消息类型判断处理方式
-	sendBuf, err := GenerateTCPPackage(acceptSock.LocalIP,
-		acceptSock.LocalMAC,
-		acceptSock.RemoteIP,
-		acceptSock.Nexthop,
-		acceptSock.LocalPort,
-		acceptSock.RemotePort,
-		TCP_SIGNAL_ACK|TCP_SIGNAL_PSH,
-		acceptSock.TCPSock.SeqNum,
-		acceptSock.TCPSock.AckNum,
-		options,
-		payload,
-		acceptSock.Handle.IsLoopback)
-	if err != nil {
-		return err
-	}
-
-	p.sendBuffer(acceptSock.Handle, sendBuf)
-	return nil
-}
-
-func (p *ProtocolObject) SendFinAck(s *Socket, payload []byte) error {
-	option_nop := layers.TCPOption{
-		OptionType: layers.TCPOptionKindNop,
-	}
-
-	option_nop2 := layers.TCPOption{
-		OptionType: layers.TCPOptionKindNop,
-	}
-
-	options := make([]layers.TCPOption, 0)
-	options = append(options, option_nop, option_nop2)
-
-	if s.IsSupportTimestamp {
-		buf := make([]byte, 4)
-		binary.BigEndian.PutUint32(buf, s.TsEcho)
-		option_timstamp := layers.TCPOption{
-			OptionType:   layers.TCPOptionKindTimestamps,
-			OptionLength: 10,
-		}
-
-		option_timstamp.OptionData = append(option_timstamp.OptionData, getCurrentTimestampBigEndian()...)
-		option_timstamp.OptionData = append(option_timstamp.OptionData, buf...)
-
-		options = append(options, option_timstamp)
-	}
-
-	// 根据当前的消息类型判断处理方式
-	sendBuf, err := GenerateTCPPackage(s.LocalIP,
-		s.LocalMAC,
-		s.RemoteIP,
-		s.Nexthop,
-		s.LocalPort,
-		s.RemotePort,
-		TCP_SIGNAL_ACK|TCP_SIGNAL_FIN,
-		s.TCPSock.SeqNum,
-		s.TCPSock.AckNum,
-		options,
-		payload,
-		s.Handle.IsLoopback)
-	if err != nil {
-		return err
-	}
-
-	// change status
-	if s.TCPSock.Status == TCP_CLOSE_WAIT {
-		s.TCPSock.Status = TCP_LAST_ACK
-	} else if s.TCPSock.Status == TCP_ESTABLISHED {
-		s.TCPSock.Status = TCP_FIN_WAIT1
-	}
-
-	err = p.sendBuffer(s.Handle, sendBuf)
-	return err
 }
 
 func (p *ProtocolObject) tcpsignalHandle(s *Socket, buf []byte) (int, error) {
@@ -839,99 +629,126 @@ func (p *ProtocolObject) protocolStackHandle(s *Socket) error {
 		}
 		pSock.Lock.Lock()
 		defer pSock.Lock.Unlock()
+
 		switch tcp_signal {
 		case TCP_SIGNAL_SYN:
 			if !ok {
 				p.Append(pSock)
-				pSock.UpdateNum()
-				p.SendSynAck(pSock, nil)
-				pSock.PreLenOfSent = 0
-				pSock.TCPSock.Status = TCP_SYN_RECV
+				p.sendTCPPacket(pSock, nil, TCP_SIGNAL_ACK)
 			}
 		case TCP_SIGNAL_SYN | TCP_SIGNAL_ACK:
-			if !ok {
-				p.Append(pSock)
-				pSock.UpdateNum()
-				p.SendAck(pSock, nil)
-				pSock.PreLenOfSent = 0
-				pSock.TCPSock.Status = TCP_ESTABLISHED
-			} else {
-				if sock.TCPSock.Status == TCP_SYN_SENT {
-					p.SendAck(pSock, nil)
-					pSock.TCPSock.Status = TCP_ESTABLISHED
+			if ok {
+				if pSock.TCPSock.Status == TCP_SYN_SENT {
+					p.sendTCPPacket(pSock, nil, TCP_SIGNAL_ACK)
 				}
 			}
-		case TCP_SIGNAL_FIN | TCP_SIGNAL_ACK:
+		case TCP_SIGNAL_FIN | TCP_SIGNAL_ACK: // 还有一种可能是附带数据的情况,比如fin|psh|ack, 所以在这个地方，需要处理数据
 			if ok {
-				pSock.UpdateNum()
-				if pSock.IsSupportTimestamp {
-					pSock.TsEcho = s.GetTsEcho() // bigendian
-				}
 				if pSock.TCPSock.Status == TCP_ESTABLISHED {
-					p.SendAck(pSock, nil)
-					pSock.PreLenOfSent = 0
-					pSock.TCPSock.Status = TCP_CLOSE_WAIT
+					p.sendTCPPacket(pSock, nil, TCP_SIGNAL_ACK)
 				}
+			}
+		case TCP_SIGNAL_FIN | TCP_SIGNAL_PSH | TCP_SIGNAL_ACK:
+			if pSock.TCPSock.Status == TCP_ESTABLISHED {
+				// 处理数据
+				if len(pSock.RecvedPayload) > 0 {
+					pSock.DataBuf.Write(s.RecvedPayload, len(s.RecvedPayload))
+				}
+				// 已经建立了连接
+				p.sendTCPPacket(pSock, nil, TCP_SIGNAL_ACK)
+
+				// 数据
 			}
 		case TCP_SIGNAL_PSH | TCP_SIGNAL_ACK:
 			if ok {
-				pSock.UpdateNum()
-				if sock.TCPSock.Status == TCP_ESTABLISHED {
+				if pSock.TCPSock.Status == TCP_ESTABLISHED {
 					// 处理数据
-					if len(s.RecvedPayload) > 0 {
-						sock.databuf.Write(s.RecvedPayload, len(s.RecvedPayload))
-						sock.msg <- SocketMsg_RecvData
+					if len(pSock.RecvedPayload) > 0 {
+						pSock.DataBuf.Write(s.RecvedPayload, len(s.RecvedPayload))
 					}
 					// 已经建立了连接
-					p.SendAck(sock, nil)
-
-					// 数据
+					p.sendTCPPacket(pSock, nil, TCP_SIGNAL_ACK)
 				}
 			}
 		case TCP_SIGNAL_ACK:
 			if ok {
-				pSock.UpdateNum()
-				if sock.TCPSock.Status == TCP_SYN_RECV {
+				if pSock.TCPSock.Status == TCP_SYN_RECV {
 					// 已经发送的Syn+Ack
-					sock.TCPSock.Status = TCP_ESTABLISHED
-					// p.AcceptSocket <- sock
+					pSock.TCPSock.Status = TCP_ESTABLISHED
 					p.accpetStack.Push(pSock)
-				} else if sock.TCPSock.Status == TCP_ESTABLISHED {
+				} else if pSock.TCPSock.Status == TCP_ESTABLISHED {
 					// 已经建立连接，则可能接收到数据
-					sock.databuf.Write(s.RecvedPayload, len(s.RecvedPayload))
-					sock.msg <- SocketMsg_RecvData
-				} else if sock.TCPSock.Status == TCP_FIN_WAIT1 {
-					sock.TCPSock.Status = TCP_FIN_WAIT2
-				} else if sock.TCPSock.Status == TCP_FIN_WAIT2 {
-					sock.TCPSock.Status = TCP_TIME_WAIT
+					pSock.DataBuf.Write(s.RecvedPayload, len(s.RecvedPayload))
+				} else if pSock.TCPSock.Status == TCP_FIN_WAIT1 {
+					pSock.TCPSock.Status = TCP_FIN_WAIT2
+				} else if pSock.TCPSock.Status == TCP_FIN_WAIT2 {
+					pSock.TCPSock.Status = TCP_TIME_WAIT
 					// 启动定时器
 					TimerCall(0, 2*MSL, func() {
-						if s.Status == TCP_TIME_WAIT {
+						if pSock.Status == TCP_TIME_WAIT {
 							return
-						} else if s.Status == TCP_FIN_WAIT2 {
-							s.Status = TCP_CLOSE
+						} else if pSock.Status == TCP_FIN_WAIT2 {
+							pSock.Status = TCP_CLOSE
 						}
 					})
-				} else if sock.TCPSock.Status == TCP_TIME_WAIT {
-					sock.TCPSock.Status = TCP_CLOSE
-				} else if sock.TCPSock.Status == TCP_LAST_ACK {
-					sock.TCPSock.Status = TCP_CLOSE
+				} else if pSock.TCPSock.Status == TCP_TIME_WAIT {
+					pSock.TCPSock.Status = TCP_CLOSE
+				} else if pSock.TCPSock.Status == TCP_LAST_ACK {
+					pSock.TCPSock.Status = TCP_CLOSE
+				}
+			}
+
+		case TCP_SIGNAL_FIN:
+			if ok {
+				if pSock.TCPSock.Status == TCP_ESTABLISHED {
+					p.sendTCPPacket(pSock, nil, TCP_SIGNAL_ACK)
 				}
 			}
 		}
-	} else if s.SocketType == SocketType_DGRAM {
+	} else if pSock.SocketType == SocketType_DGRAM {
 
 	}
 
 	// 触发通知回调
 	if pSock != nil {
 		isNotify := pSock.IsTriggerNotify.Load()
-		if s.NotifyCallback != nil && isNotify {
-			s.NotifyCallback()
+		if pSock.NotifyCallback != nil && isNotify {
+			pSock.NotifyCallback()
 		}
 	}
 
 	return nil
+}
+
+func (p *ProtocolObject) Append(s *Socket) {
+	flag := fmt.Sprintf("%v:%v", s.RemoteIP.String(), s.RemotePort)
+	p.lock_SocketList.Lock()
+	if p.SocketType == SocketType_STREAM {
+		p.TCPSocketsList[flag] = s
+	} else if p.SocketType == SocketType_DGRAM {
+		p.TCPSocketsList[flag] = s
+	}
+	p.lock_SocketList.Unlock()
+}
+
+func (p *ProtocolObject) RemoveSockFromList(s *Socket) {
+	flag := fmt.Sprintf("%v:%v", s.RemoteIP.String(), s.RemotePort)
+	p.lock_SocketList.Lock()
+	if p.SocketType == SocketType_STREAM {
+		p.TCPSocketsList[flag] = nil
+	} else if p.SocketType == SocketType_DGRAM {
+		p.UDPSocketsList[flag] = nil
+	}
+	p.lock_SocketList.Unlock()
+}
+
+func (p *ProtocolObject) IsInBufferSockets(s *Socket) (*Socket, bool) {
+	flag := fmt.Sprintf("%v:%v", s.RemoteIP.String(), s.RemotePort)
+	ret, ok := p.TCPSocketsList[flag]
+	if ok {
+		return ret, true
+	}
+	return nil, false
 }
 
 func (p *ProtocolObject) Wait() {
@@ -972,16 +789,15 @@ func (p *ProtocolObject) Connect(targetIP net.IP, targetPort uint16, nexthopMAC 
 	p.lock_SocketList.Unlock()
 	// 设置
 	p.originSocket.Lock.Lock()
-	err := p.SendSyn(p.originSocket, nil)
+	err := p.sendTCPPacket(p.originSocket, nil, TCP_SIGNAL_SYN)
 	if err != nil {
 		return nil, err
 	}
 	p.originSocket.TCPSock.Status = TCP_SYN_SENT
 	p.originSocket.Lock.Unlock()
-
 	wg.Wait() // 等待连接完成
 
-	return nil, nil
+	return p.originSocket, nil
 }
 
 func (p *ProtocolObject) Accept() (*Socket, error) {
@@ -1005,18 +821,23 @@ func (p *ProtocolObject) Recv(s *Socket, result *[]byte) int {
 	if result == nil {
 		return -1
 	}
-loop:
-	select {
-	case msg := <-s.msg:
-		switch msg {
-		case SocketMsg_RecvData:
-			*result = append(*result, s.RecvedPayload...)
-			break loop
-		case SocketMsg_Closed:
-			return 0
+	lenofresult := 0
+	for {
+		if s.SocketType == SocketType_STREAM {
+			if s.TCPSock.Status == TCP_CLOSE {
+				break
+			}
+			if s.DataBuf.Length() > 0 {
+				*result, lenofresult = s.DataBuf.Read()
+				break
+			}
+		} else if s.SocketType == SocketType_DGRAM {
+
 		}
+
+		runtime.Gosched()
 	}
-	return len(*result)
+	return lenofresult
 }
 
 func (p *ProtocolObject) Send(s *Socket, payload []byte) int {
@@ -1025,7 +846,7 @@ func (p *ProtocolObject) Send(s *Socket, payload []byte) int {
 	}
 
 	if s.SocketType == SocketType_STREAM && s.TCPSock.Status == TCP_ESTABLISHED {
-		p.SendPshAck(s, payload)
+		p.sendTCPPacket(s, payload, TCP_SIGNAL_PSH|TCP_SIGNAL_ACK)
 		s.PreLenOfSent = uint32(len(payload))
 	} else if s.SocketType == SocketType_DGRAM {
 		p.Sendto(s, payload)
@@ -1033,8 +854,12 @@ func (p *ProtocolObject) Send(s *Socket, payload []byte) int {
 	return -1
 }
 
+func (p *ProtocolObject) Sendto(s *Socket, payload []byte) error {
+	return nil
+}
+
 func (p *ProtocolObject) Close(s *Socket, payload []byte) int {
-	p.SendFinAck(s, payload)
+	p.sendTCPPacket(s, payload, TCP_SIGNAL_FIN|TCP_SIGNAL_ACK)
 	p.RemoveSockFromList(s)
 	return -1
 }
