@@ -263,9 +263,19 @@ func (p *ProtocolObject) CloseDevice() {
 }
 
 func (p *ProtocolObject) CloseAllofSockets() {
-	for _, socket := range p.TCPSocketsList {
-		p.Close(socket, nil)
+	p.lock_SocketList.Lock()
+	defer p.lock_SocketList.Unlock()
+
+	if p.SocketType == SocketType_STREAM {
+		for _, socket := range p.TCPSocketsList {
+			p.Close(socket)
+		}
+	} else if p.SocketType == SocketType_DGRAM {
+		for _, socket := range p.UDPSocketsList {
+			p.Close(socket)
+		}
 	}
+
 }
 
 func (p *ProtocolObject) SetCallback(f func(*Socket, []byte) error) {
@@ -382,6 +392,10 @@ func (p *ProtocolObject) sendTCPPacket(s *Socket, payload []byte, signal int) er
 	return err
 }
 
+func (p *ProtocolObject) sendUDPPacket(s *Socket, payload []byte) error {
+	return nil
+}
+
 func (p *ProtocolObject) msgLoop() error {
 	if p.DevHandle == nil {
 		return errors.New("please open the device.")
@@ -400,7 +414,6 @@ func (p *ProtocolObject) msgLoop() error {
 				return
 			}
 			func() {
-				//packet := gopacket.NewPacket(stream.Data(), p.DevHandle.Handle.LinkType(), gopacket.Default)
 				packet := stream
 				if packet == nil {
 					return
@@ -614,15 +627,19 @@ func (p *ProtocolObject) protocolStackHandle(s *Socket) error {
 			pSock.RecvedPayload = append(pSock.RecvedPayload, s.RecvedPayload...)
 		} else {
 			pSock = s
+			p.Append(pSock)
 		}
 
 		pSock.Lock.Lock()
 		defer pSock.Lock.Unlock()
 
+		if !pSock.CheckAckNum() {
+			return errors.New("ack check error")
+		}
+
 		switch tcp_signal {
 		case TCP_SIGNAL_SYN:
 			if !ok {
-				p.Append(pSock)
 				p.sendTCPPacket(pSock, nil, TCP_SIGNAL_ACK)
 			}
 		case TCP_SIGNAL_SYN | TCP_SIGNAL_ACK:
@@ -641,7 +658,7 @@ func (p *ProtocolObject) protocolStackHandle(s *Socket) error {
 			if pSock.TCPSock.Status == TCP_ESTABLISHED {
 				// 处理数据
 				if len(pSock.RecvedPayload) > 0 {
-					pSock.DataBuf.Write(s.RecvedPayload, len(s.RecvedPayload))
+					pSock.DataBuf.Write(s.RecvedPayload)
 				}
 				// 已经建立了连接
 				p.sendTCPPacket(pSock, nil, TCP_SIGNAL_ACK)
@@ -653,7 +670,7 @@ func (p *ProtocolObject) protocolStackHandle(s *Socket) error {
 				if pSock.TCPSock.Status == TCP_ESTABLISHED {
 					// 处理数据
 					if len(pSock.RecvedPayload) > 0 {
-						pSock.DataBuf.Write(s.RecvedPayload, len(s.RecvedPayload))
+						pSock.DataBuf.Write(s.RecvedPayload)
 					}
 					// 已经建立了连接
 					p.sendTCPPacket(pSock, nil, TCP_SIGNAL_ACK)
@@ -667,7 +684,7 @@ func (p *ProtocolObject) protocolStackHandle(s *Socket) error {
 					p.accpetStack.Push(pSock)
 				} else if pSock.TCPSock.Status == TCP_ESTABLISHED {
 					// 已经建立连接，则可能接收到数据
-					pSock.DataBuf.Write(s.RecvedPayload, len(s.RecvedPayload))
+					pSock.DataBuf.Write(s.RecvedPayload)
 				} else if pSock.TCPSock.Status == TCP_FIN_WAIT1 {
 					pSock.TCPSock.Status = TCP_FIN_WAIT2
 				} else if pSock.TCPSock.Status == TCP_FIN_WAIT2 {
@@ -830,13 +847,17 @@ func (p *ProtocolObject) Recv(s *Socket, result *[]byte) int {
 }
 
 func (p *ProtocolObject) Send(s *Socket, payload []byte) int {
-	if s == nil {
+	if s == nil || len(payload) == 0 {
 		return -1
 	}
 
 	if s.SocketType == SocketType_STREAM && s.TCPSock.Status == TCP_ESTABLISHED {
+		s.Lock.Lock()
+		s.NotifyCallback = func() {
+
+		}
+		s.Lock.Unlock()
 		p.sendTCPPacket(s, payload, TCP_SIGNAL_PSH|TCP_SIGNAL_ACK)
-		s.PreLenOfSent = uint32(len(payload))
 	} else if s.SocketType == SocketType_DGRAM {
 		p.Sendto(s, payload)
 	}
@@ -847,8 +868,7 @@ func (p *ProtocolObject) Sendto(s *Socket, payload []byte) error {
 	return nil
 }
 
-func (p *ProtocolObject) Close(s *Socket, payload []byte) int {
-	p.sendTCPPacket(s, payload, TCP_SIGNAL_FIN|TCP_SIGNAL_ACK)
-	p.RemoveSockFromList(s)
+func (p *ProtocolObject) Close(s *Socket) int {
+	p.sendTCPPacket(s, nil, TCP_SIGNAL_FIN|TCP_SIGNAL_ACK)
 	return -1
 }
