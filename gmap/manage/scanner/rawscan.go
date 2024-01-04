@@ -361,7 +361,6 @@ func (p *SimplePacketProcessor) GenerateTCPPackage(srcIP net.IP,
 		}
 		tcp.Seq = seq
 		tcp.Ack = ack
-		tcp.Payload = append(tcp.Payload, payload...)
 		tcp.Options = append(tcp.Options, options...)
 		tcp.SetNetworkLayerForChecksum(ipv4)
 
@@ -374,12 +373,12 @@ func (p *SimplePacketProcessor) GenerateTCPPackage(srcIP net.IP,
 		if p.scanEntity.Nexthops[0].IsLoopback {
 			loopbackLayer := &layers.Loopback{}
 			loopbackLayer.Family = layers.ProtocolFamilyIPv4
-			err := gopacket.SerializeLayers(buf, opts, loopbackLayer, ipv4, tcp)
+			err := gopacket.SerializeLayers(buf, opts, loopbackLayer, ipv4, tcp, gopacket.Payload(payload))
 			if err != nil {
 				return nil, err
 			}
 		} else {
-			err := gopacket.SerializeLayers(buf, opts, ethernet, ipv4, tcp)
+			err := gopacket.SerializeLayers(buf, opts, ethernet, ipv4, tcp, gopacket.Payload(payload))
 			if err != nil {
 				return nil, err
 			}
@@ -421,7 +420,6 @@ func (p *SimplePacketProcessor) GenerateTCPPackage(srcIP net.IP,
 		}
 		tcp.Seq = seq
 		tcp.Ack = ack
-		tcp.Payload = append(tcp.Payload, payload...)
 		tcp.Options = append(tcp.Options, options...)
 		tcp.SetNetworkLayerForChecksum(ipv6)
 
@@ -434,12 +432,12 @@ func (p *SimplePacketProcessor) GenerateTCPPackage(srcIP net.IP,
 		if p.scanEntity.Nexthops[0].IsLoopback {
 			loopbackLayer := &layers.Loopback{}
 			loopbackLayer.Family = layers.ProtocolFamilyIPv6Linux
-			err := gopacket.SerializeLayers(buf, opts, loopbackLayer, ipv6, tcp)
+			err := gopacket.SerializeLayers(buf, opts, loopbackLayer, ipv6, tcp, gopacket.Payload(payload))
 			if err != nil {
 				return nil, err
 			}
 		} else {
-			err := gopacket.SerializeLayers(buf, opts, ethernet, ipv6, tcp)
+			err := gopacket.SerializeLayers(buf, opts, ethernet, ipv6, tcp, gopacket.Payload(payload))
 			if err != nil {
 				return nil, err
 			}
