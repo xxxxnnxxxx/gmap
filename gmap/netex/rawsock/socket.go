@@ -211,18 +211,30 @@ func (p *Socket) UpdateNum() {
 // 检查获取的需要是否合法
 // seq + 1 = ack or  seq + prelenofsent = ack
 func (p *Socket) CheckAckNum() bool {
-	if p.PreLenOfSent > 0 {
-		if p.SeqNum+p.PreLenOfSent == p.RecvedAckNum {
-			return true
+	if p.SocketType == SocketType_STREAM {
+		if p.PreSignal == TCP_SIGNAL_ACK {
+			if p.SeqNum == p.RecvedAckNum {
+				return true
+			} else {
+				return false
+			}
 		} else {
-			return false
+			if p.PreLenOfSent > 0 {
+				if p.SeqNum+p.PreLenOfSent == p.RecvedAckNum {
+					return true
+				} else {
+					return false
+				}
+			} else {
+				if p.SeqNum+1 == p.RecvedAckNum {
+					return true
+				} else {
+					return false
+				}
+			}
 		}
-	} else {
-		if p.SeqNum+1 == p.RecvedAckNum {
-			return true
-		} else {
-			return false
-		}
+	} else if p.SocketType == SocketType_DGRAM {
+
 	}
 
 	return false
