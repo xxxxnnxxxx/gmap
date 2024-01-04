@@ -359,7 +359,7 @@ func (p *ProtocolObject) sendTCPPacket(s *Socket, payload []byte, signal int) er
 		return err
 	}
 	// 保存上一个信号
-	s.PreSignal = signal
+	s.PreSentSignal = signal
 	//
 	s.PreLenOfSent = uint32(len(payload))
 	// 根据信号，改变套接字状态
@@ -620,11 +620,14 @@ func (p *ProtocolObject) protocolStackHandle(s *Socket) error {
 
 		sock, ok := p.IsInBufferSockets(s)
 		if ok {
+			sock.Lock.Lock()
 			pSock = sock
 			pSock.RecvedSeqNum = s.RecvedSeqNum
 			pSock.RecvedAckNum = s.RecvedAckNum
 			pSock.LenOfRecved = s.LenOfRecved
 			pSock.RecvedPayload = append(pSock.RecvedPayload, s.RecvedPayload...)
+			pSock.PreRecvedSignal = tcp_signal // 当前接收到的信号
+			sock.Lock.Unlock()
 		} else {
 			pSock = s
 			p.Append(pSock)
@@ -850,18 +853,36 @@ func (p *ProtocolObject) Send(s *Socket, payload []byte) int {
 	if s == nil || len(payload) == 0 {
 		return -1
 	}
-
+	ret := -1
+	wg := new(sync.WaitGroup)
+	wg.Add(1)
 	if s.SocketType == SocketType_STREAM && s.TCPSock.Status == TCP_ESTABLISHED {
 		s.Lock.Lock()
+		s.IsTriggerNotify.Store(true)
 		s.NotifyCallback = func() {
-
+			isNotify := s.IsTriggerNotify.Load()
+			if s.PreSentSignal == TCP_SIGNAL_PSH|TCP_SIGNAL_ACK && s.PreRecvedSignal == TCP_SIGNAL_ACK && isNotify {
+				if s.SeqNum+uint32(len(payload)) == s.RecvedAckNum {
+					ret = len(payload)
+					wg.Done()
+				}
+				s.IsTriggerNotify.Store(false)
+			}
 		}
 		s.Lock.Unlock()
 		p.sendTCPPacket(s, payload, TCP_SIGNAL_PSH|TCP_SIGNAL_ACK)
 	} else if s.SocketType == SocketType_DGRAM {
 		p.Sendto(s, payload)
 	}
-	return -1
+
+	wg.Wait()
+
+	if ret == len(payload) {
+		s.SetLastError(nil)
+	} else if ret <= 0 {
+		s.SetLastError(errors.New("send data failed"))
+	}
+	return ret
 }
 
 func (p *ProtocolObject) Sendto(s *Socket, payload []byte) error {

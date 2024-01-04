@@ -130,7 +130,8 @@ type TCPSock struct {
 	RecvedAckNum                               uint32 // 确认序列号
 	DataOffset                                 uint8
 	FIN, SYN, RST, PSH, ACK, URG, ECE, CWR, NS bool
-	PreSignal                                  int // FIN/SYN/RST/PSH/ACK/URG/ECE/CWR/NS 分析后得到的信号
+	PreRecvedSignal                            int // 当前接收的信号  FIN/SYN/RST/PSH/ACK/URG/ECE/CWR/NS 分析后得到的信号
+	PreSentSignal                              int // FIN/SYN/RST/PSH/ACK/URG/ECE/CWR/NS 分析后得到的信号
 	Options                                    []layers.TCPOption
 	IsSupportTimestamp                         bool   // 是否支持时间戳
 	TsEcho                                     uint32 // 时间戳相关
@@ -167,8 +168,9 @@ type Socket struct {
 	IsTriggerNotify atomic.Bool
 	NotifyCallback  func()
 
-	DataBuf *common.Buffer
-	Err     error
+	DataBuf        *common.Buffer
+	lock_lastError sync.Mutex
+	lastError      error
 }
 
 func NewSocket() *Socket {
@@ -191,7 +193,7 @@ func (p *Socket) Clone() *Socket {
 func (p *Socket) UpdateNum() {
 	if p.SocketType == SocketType_STREAM {
 		// ack 不消费顺序号
-		if p.PreSignal != TCP_SIGNAL_ACK {
+		if p.PreSentSignal != TCP_SIGNAL_ACK {
 			if p.PreLenOfSent == 0 {
 				p.SeqNum++
 			} else {
@@ -212,7 +214,7 @@ func (p *Socket) UpdateNum() {
 // seq + 1 = ack or  seq + prelenofsent = ack
 func (p *Socket) CheckAckNum() bool {
 	if p.SocketType == SocketType_STREAM {
-		if p.PreSignal == TCP_SIGNAL_ACK {
+		if p.PreSentSignal == TCP_SIGNAL_ACK {
 			if p.SeqNum == p.RecvedAckNum {
 				return true
 			} else {
@@ -252,7 +254,15 @@ func (p *Socket) GetTsEcho() uint32 {
 	return result
 }
 
+// 设置最近的错误
+func (p *Socket) SetLastError(err error) {
+	p.lock_lastError.Lock()
+	defer p.lock_lastError.Unlock()
+
+	p.lastError = err
+}
+
 // 获取最近的错误
 func (p *Socket) GetLastError() error {
-	return p.Err
+	return p.lastError
 }
