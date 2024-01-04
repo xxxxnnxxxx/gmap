@@ -17,12 +17,12 @@ func NewBuffer() *Buffer {
 	}
 }
 
-func (p *Buffer) Write(content []byte, length int) int {
-	if content == nil || length <= 0 {
+func (p *Buffer) Write(content []byte) int {
+	if content == nil {
 		return -1
 	}
 	p.mutex.Lock()
-	p.buf.Write(content[:length-1])
+	p.buf.Write(content)
 	p.mutex.Unlock()
 
 	return len(content)
