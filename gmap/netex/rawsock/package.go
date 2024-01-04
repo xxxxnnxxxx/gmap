@@ -56,7 +56,6 @@ func GenerateTCPPackage(srcIP net.IP,
 		}
 		tcp.Seq = seq
 		tcp.Ack = ack
-		tcp.Payload = append(tcp.Payload, payload...)
 		tcp.Options = append(tcp.Options, options...)
 		tcp.SetNetworkLayerForChecksum(ipv4)
 
@@ -69,7 +68,7 @@ func GenerateTCPPackage(srcIP net.IP,
 		if isLoopback {
 			loopbackLayer := &layers.Loopback{}
 			loopbackLayer.Family = layers.ProtocolFamilyIPv4
-			err := gopacket.SerializeLayers(buf, opts, loopbackLayer, ipv4, tcp)
+			err := gopacket.SerializeLayers(buf, opts, loopbackLayer, ipv4, tcp, gopacket.Payload(payload))
 			if err != nil {
 				return nil, err
 			}
@@ -79,7 +78,7 @@ func GenerateTCPPackage(srcIP net.IP,
 			ethernet.EthernetType = 0x800
 			ethernet.DstMAC = dstMac
 			ethernet.SrcMAC = srcMac
-			err := gopacket.SerializeLayers(buf, opts, ethernet, ipv4, tcp)
+			err := gopacket.SerializeLayers(buf, opts, ethernet, ipv4, tcp, gopacket.Payload(payload))
 			if err != nil {
 				return nil, err
 			}
@@ -121,7 +120,6 @@ func GenerateTCPPackage(srcIP net.IP,
 		}
 		tcp.Seq = seq
 		tcp.Ack = ack
-		tcp.Payload = append(tcp.Payload, payload...)
 		tcp.Options = append(tcp.Options, options...)
 		tcp.SetNetworkLayerForChecksum(ipv6)
 
@@ -134,7 +132,7 @@ func GenerateTCPPackage(srcIP net.IP,
 		if isLoopback {
 			loopbackLayer := &layers.Loopback{}
 			loopbackLayer.Family = layers.ProtocolFamilyIPv6BSD
-			err := gopacket.SerializeLayers(buf, opts, loopbackLayer, ipv6, tcp)
+			err := gopacket.SerializeLayers(buf, opts, loopbackLayer, ipv6, tcp, gopacket.Payload(payload))
 			if err != nil {
 				return nil, err
 			}
@@ -144,7 +142,7 @@ func GenerateTCPPackage(srcIP net.IP,
 			ethernet.EthernetType = 0x800
 			ethernet.DstMAC = dstMac
 			ethernet.SrcMAC = srcMac
-			err := gopacket.SerializeLayers(buf, opts, ethernet, ipv6, tcp)
+			err := gopacket.SerializeLayers(buf, opts, ethernet, ipv6, tcp, gopacket.Payload(payload))
 			if err != nil {
 				return nil, err
 			}
