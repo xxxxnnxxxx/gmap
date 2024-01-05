@@ -47,6 +47,7 @@ type ProtocolObject struct {
 	DevHandle  *device.DeviceHandle
 	Ifs        []pcap.Interface // 所有的接口信息
 	AdapterInfo
+	MTU int // 最大传输单元
 
 	Wg         sync.WaitGroup
 	Timeout    time.Duration // 设置监听时间 Listen的时间
@@ -70,6 +71,7 @@ func NewProtocolObject(socketType int) *ProtocolObject {
 		SocketType:     socketType,
 		DevHandle:      device.NewDeviceHandle(),
 		Ifs:            make([]pcap.Interface, 0),
+		MTU:            1200,
 		Done:           make(chan struct{}),
 		originSocket:   nil,
 		TCPSocketsList: make(map[string]*Socket),
@@ -233,23 +235,24 @@ func (p *ProtocolObject) InitAdapter(iftype int, param string) error {
 	return nil
 }
 
-func (p *ProtocolObject) BindSocket(port uint16) {
-	p.originSocket = NewSocket()
+func (p *ProtocolObject) Bind(s *Socket) {
+	p.originSocket = s
 	p.originSocket.SocketType = p.SocketType
 	p.originSocket.Handle = p.DevHandle
 	p.originSocket.LocalIP = net.ParseIP(p.AdapterInfo.Addrs[0].IP.String())
 	p.originSocket.LocalMAC = p.AdapterInfo.MAC // 赋值原视频
 	p.originSocket.SeqNum = generateRandowSeq()
-	if port == 0 {
-		p.originSocket.LocalPort = uint16(GeneratePort())
-	} else {
-		p.originSocket.LocalPort = port
-	}
 }
 
 func (p *ProtocolObject) Startup() error {
 	if p.originSocket == nil {
-		return errors.New("not initialize originsocket")
+		p.originSocket = NewSocket()
+		p.originSocket.SocketType = p.SocketType
+		p.originSocket.Handle = p.DevHandle
+		p.originSocket.LocalIP = net.ParseIP(p.AdapterInfo.Addrs[0].IP.String())
+		p.originSocket.LocalMAC = p.AdapterInfo.MAC // 赋值原视频
+		p.originSocket.SeqNum = generateRandowSeq()
+		p.originSocket.LocalPort = uint16(GeneratePort())
 	}
 
 	// 启动消息循环，获取消息
@@ -295,9 +298,11 @@ func (p *ProtocolObject) sendBuffer(handle *device.DeviceHandle, bytes []byte) e
 	return device.SendBuf(handle.Handle, bytes)
 }
 
-func (p *ProtocolObject) sendTCPPacket(s *Socket, payload []byte, signal int) error {
+// 返回的值为 seq 数据
+// 为了后续可以根据数据确认回包的正确性
+func (p *ProtocolObject) sendTCPPacket(s *Socket, payload []byte, signal int) (uint32, error) {
 	if s.SocketType != SocketType_STREAM {
-		return errors.New("not a tcp")
+		return 0, errors.New("not a tcp")
 	}
 
 	options := make([]layers.TCPOption, 0)
@@ -333,10 +338,6 @@ func (p *ProtocolObject) sendTCPPacket(s *Socket, payload []byte, signal int) er
 
 		options = append(options, option_timstamp)
 	}
-
-	// 更新顺序号和确认号
-	s.UpdateNum()
-
 	// 根据当前的消息类型判断处理方式
 	sendBuf, err := GenerateTCPPackage(s.LocalIP,
 		s.LocalMAC,
@@ -351,17 +352,19 @@ func (p *ProtocolObject) sendTCPPacket(s *Socket, payload []byte, signal int) er
 		payload,
 		s.Handle.IsLoopback)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
 	err = p.sendBuffer(s.Handle, sendBuf)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	// 保存上一个信号
 	s.PreSentSignal = signal
 	//
 	s.PreLenOfSent = uint32(len(payload))
+	// 更新序号
+	s.UpdateSeqNum()
 	// 根据信号，改变套接字状态
 	switch signal {
 	case TCP_SIGNAL_SYN:
@@ -377,8 +380,12 @@ func (p *ProtocolObject) sendTCPPacket(s *Socket, payload []byte, signal int) er
 			s.TCPSock.Status = TCP_ESTABLISHED
 		} else if s.TCPSock.Status == TCP_FIN_WAIT2 {
 			s.TCPSock.Status = TCP_TIME_WAIT
-		} else if s.TCPSock.Status == TCP_ESTABLISHED {
-			s.TCPSock.Status = TCP_CLOSE_WAIT
+		} else if s.TCPSock.Status == TCP_FIN_WAIT1 {
+			s.TCPSock.Status = TCP_FIN_WAIT2
+		}
+	case TCP_SIGNAL_FIN | TCP_SIGNAL_ACK:
+		if s.TCPSock.Status == TCP_FIN_WAIT2 {
+			s.TCPSock.Status = TCP_TIME_WAIT
 		}
 	case TCP_SIGNAL_FIN:
 		// change status
@@ -389,7 +396,7 @@ func (p *ProtocolObject) sendTCPPacket(s *Socket, payload []byte, signal int) er
 		}
 	}
 
-	return err
+	return s.SeqNum, err
 }
 
 func (p *ProtocolObject) sendUDPPacket(s *Socket, payload []byte) error {
@@ -468,8 +475,6 @@ func (p *ProtocolObject) msgLoop() error {
 						if uint16(tcp.SrcPort) != p.originSocket.RemotePort && !dstIP.Equal(p.originSocket.RemoteIP) {
 							return
 						}
-					} else {
-						return
 					}
 
 					var loopback *layers.Loopback
@@ -517,6 +522,7 @@ func (p *ProtocolObject) msgLoop() error {
 					acceptSock.TCPSock.NS = tcp.NS
 					acceptSock.TCPSock.URG = tcp.URG
 					acceptSock.TCPSock.RST = tcp.RST
+
 					acceptSock.Options = append(acceptSock.Options, tcp.Options...)
 					acceptSock.LenOfRecved = uint32(len(tcp.Payload)) // 接收数据的长度
 					acceptSock.RecvedPayload = append(acceptSock.RecvedPayload, tcp.Payload...)
@@ -629,21 +635,36 @@ func (p *ProtocolObject) protocolStackHandle(s *Socket) error {
 			pSock.PreRecvedSignal = tcp_signal // 当前接收到的信号
 			sock.Lock.Unlock()
 		} else {
-			pSock = s
+			if tcp_signal != TCP_SIGNAL_SYN {
+				return errors.New("must be TPC_SIGNAL_SYN when the socket is not in the list")
+			}
+			pSock = p.originSocket.Clone()
+			pSock.RecvedSeqNum = s.RecvedSeqNum
+			pSock.RecvedAckNum = s.RecvedAckNum
+			pSock.RemoteIP = s.RemoteIP
+			pSock.RemotePort = s.RemotePort
+			pSock.Nexthop = s.Nexthop
+			pSock.LenOfRecved = s.LenOfRecved
+			pSock.RecvedPayload = append(pSock.RecvedPayload, s.RecvedPayload...)
+			pSock.PreRecvedSignal = tcp_signal // 当前接收到的信号
 			p.Append(pSock)
 		}
 
 		pSock.Lock.Lock()
 		defer pSock.Lock.Unlock()
 
-		if !pSock.CheckAckNum() {
-			return errors.New("ack check error")
+		if pSock.PreRecvedSignal != TCP_SIGNAL_SYN {
+			if pSock.SeqNum != pSock.RecvedAckNum {
+				return errors.New("check ack error")
+			}
 		}
+
+		pSock.UpdateAckNum()
 
 		switch tcp_signal {
 		case TCP_SIGNAL_SYN:
 			if !ok {
-				p.sendTCPPacket(pSock, nil, TCP_SIGNAL_ACK)
+				p.sendTCPPacket(pSock, nil, TCP_SIGNAL_ACK|TCP_SIGNAL_SYN)
 			}
 		case TCP_SIGNAL_SYN | TCP_SIGNAL_ACK:
 			if ok {
@@ -714,6 +735,9 @@ func (p *ProtocolObject) protocolStackHandle(s *Socket) error {
 				}
 			}
 		}
+
+		// 更新acknum
+		pSock.UpdateAckNum()
 
 		// 触发通知回调
 		if pSock != nil {
@@ -798,7 +822,7 @@ func (p *ProtocolObject) Connect(targetIP net.IP, targetPort uint16, nexthopMAC 
 	p.lock_SocketList.Unlock()
 	// 设置
 	p.originSocket.Lock.Lock()
-	err := p.sendTCPPacket(p.originSocket, nil, TCP_SIGNAL_SYN)
+	_, err := p.sendTCPPacket(p.originSocket, nil, TCP_SIGNAL_SYN)
 	if err != nil {
 		return nil, err
 	}
@@ -856,13 +880,16 @@ func (p *ProtocolObject) Send(s *Socket, payload []byte) int {
 	ret := -1
 	wg := new(sync.WaitGroup)
 	wg.Add(1)
+	var pSeqnum *uint32
 	if s.SocketType == SocketType_STREAM && s.TCPSock.Status == TCP_ESTABLISHED {
 		s.Lock.Lock()
 		s.IsTriggerNotify.Store(true)
 		s.NotifyCallback = func() {
 			isNotify := s.IsTriggerNotify.Load()
-			if s.PreSentSignal == TCP_SIGNAL_PSH|TCP_SIGNAL_ACK && s.PreRecvedSignal == TCP_SIGNAL_ACK && isNotify {
-				if s.SeqNum+uint32(len(payload)) == s.RecvedAckNum {
+			if s.PreSentSignal == TCP_SIGNAL_PSH|TCP_SIGNAL_ACK &&
+				s.PreRecvedSignal == TCP_SIGNAL_ACK && isNotify &&
+				s.SeqNum == *pSeqnum {
+				if s.SeqNum == s.RecvedAckNum {
 					ret = len(payload)
 					wg.Done()
 				}
@@ -870,7 +897,13 @@ func (p *ProtocolObject) Send(s *Socket, payload []byte) int {
 			}
 		}
 		s.Lock.Unlock()
-		p.sendTCPPacket(s, payload, TCP_SIGNAL_PSH|TCP_SIGNAL_ACK)
+		seqnum, err := p.sendTCPPacket(s, payload, TCP_SIGNAL_PSH|TCP_SIGNAL_ACK)
+		if err != nil {
+			s.SetLastError(err)
+			return -1
+		}
+		pSeqnum = &seqnum
+
 	} else if s.SocketType == SocketType_DGRAM {
 		p.Sendto(s, payload)
 	}

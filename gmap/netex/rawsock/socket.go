@@ -126,7 +126,7 @@ type TCPSock struct {
 	// TCP 信息
 	SeqNum                                     uint32 // 顺序号
 	AckNum                                     uint32 // 确认序列号
-	RecvedSeqNum                               uint32 // 接收到的顺序号
+	RecvedSeqNum                               uint32 // 接收顺序号
 	RecvedAckNum                               uint32 // 确认序列号
 	DataOffset                                 uint8
 	FIN, SYN, RST, PSH, ACK, URG, ECE, CWR, NS bool
@@ -185,9 +185,61 @@ func NewSocket() *Socket {
 	return result
 }
 
-func (p *Socket) Clone() *Socket {
+func CreateSocket(socketType int,
+	localPort uint16) *Socket {
+	result := NewSocket()
 
-	return nil
+	result.SocketType = socketType
+	result.LocalPort = localPort
+
+	return result
+}
+
+func (p *Socket) Clone() *Socket {
+	pSocket := NewSocket()
+	pSocket.Family = p.Family
+	pSocket.SocketType = p.SocketType
+	pSocket.Handle = p.Handle
+
+	pSocket.RemoteIP = append(pSocket.RemoteIP, p.RemoteIP...)
+	pSocket.RemotePort = p.RemotePort
+	pSocket.Nexthop = append(pSocket.Nexthop, p.Nexthop...)
+
+	pSocket.LocalIP = append(pSocket.LocalIP, p.LocalIP...)
+	pSocket.LocalPort = p.LocalPort
+	pSocket.LocalMAC = append(pSocket.LocalMAC, p.LocalMAC...)
+
+	pSocket.TCPSock.Status = p.TCPSock.Status
+	pSocket.TCPSock.SeqNum = p.TCPSock.SeqNum
+	pSocket.TCPSock.AckNum = p.TCPSock.AckNum
+	pSocket.TCPSock.RecvedAckNum = p.TCPSock.RecvedAckNum
+	pSocket.TCPSock.DataOffset = p.TCPSock.DataOffset
+	pSocket.TCPSock.FIN = p.TCPSock.FIN
+	pSocket.TCPSock.SYN = p.TCPSock.SYN
+	pSocket.TCPSock.RST = p.TCPSock.RST
+	pSocket.TCPSock.PSH = p.TCPSock.PSH
+	pSocket.TCPSock.ACK = p.TCPSock.ACK
+	pSocket.TCPSock.URG = p.TCPSock.URG
+	pSocket.TCPSock.ECE = p.TCPSock.ECE
+	pSocket.TCPSock.CWR = p.TCPSock.CWR
+	pSocket.TCPSock.NS = p.TCPSock.NS
+	pSocket.TCPSock.PreRecvedSignal = p.TCPSock.PreRecvedSignal
+	pSocket.TCPSock.PreSentSignal = p.TCPSock.PreSentSignal
+	pSocket.TCPSock.Options = append(pSocket.TCPSock.Options, p.TCPSock.Options...)
+	pSocket.TCPSock.IsSupportTimestamp = p.TCPSock.IsSupportTimestamp
+	pSocket.TCPSock.TsEcho = p.TCPSock.TsEcho
+	pSocket.TCPSock.MSS = p.TCPSock.MSS
+	pSocket.TCPSock.WinSize = p.TCPSock.WinSize
+	pSocket.TCPSock.RecvdWinSize = p.TCPSock.RecvdWinSize
+
+	pSocket.UDPSock.Length = p.UDPSock.Length
+
+	pSocket.PreLenOfSent = p.PreLenOfSent
+
+	pSocket.LenOfRecved = p.LenOfRecved
+	pSocket.RecvedPayload = append(pSocket.RecvedPayload, p.RecvedPayload...)
+
+	return pSocket
 }
 
 // 获取下一个包的seq,表示发送下一个包，这个值就是对应的seq
@@ -208,56 +260,30 @@ func (p *Socket) GetNextSeq() uint32 {
 }
 
 // 更新序列号
-func (p *Socket) UpdateNum() {
+func (p *Socket) UpdateSeqNum() {
 	if p.SocketType == SocketType_STREAM {
-		// ack 不消费顺序号
 		if p.PreSentSignal != TCP_SIGNAL_ACK {
-			if p.PreLenOfSent == 0 {
-				p.SeqNum++
-			} else {
+			if p.PreLenOfSent > 0 {
 				p.SeqNum += p.PreLenOfSent
+			} else {
+				p.SeqNum++
 			}
 		}
 
-		if p.LenOfRecved == 0 {
-			p.AckNum = p.RecvedSeqNum + 1
-		} else {
-			p.AckNum = p.RecvedSeqNum + p.LenOfRecved
-		}
-	} else if p.SocketType == SocketType_DGRAM {
 	}
 }
 
-// 检查获取的需要是否合法
-// seq + 1 = ack or  seq + prelenofsent = ack
-func (p *Socket) CheckAckNum() bool {
+func (p *Socket) UpdateAckNum() {
 	if p.SocketType == SocketType_STREAM {
-		if p.PreSentSignal == TCP_SIGNAL_ACK {
-			if p.SeqNum == p.RecvedAckNum {
-				return true
+		p.AckNum = p.RecvedSeqNum
+		if p.PreRecvedSignal != TCP_SIGNAL_ACK {
+			if p.LenOfRecved > 0 {
+				p.AckNum += p.LenOfRecved
 			} else {
-				return false
-			}
-		} else {
-			if p.PreLenOfSent > 0 {
-				if p.SeqNum+p.PreLenOfSent == p.RecvedAckNum {
-					return true
-				} else {
-					return false
-				}
-			} else {
-				if p.SeqNum+1 == p.RecvedAckNum {
-					return true
-				} else {
-					return false
-				}
+				p.AckNum++
 			}
 		}
-	} else if p.SocketType == SocketType_DGRAM {
-
 	}
-
-	return false
 }
 
 func (p *Socket) GetTsEcho() uint32 {
