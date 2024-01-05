@@ -237,10 +237,10 @@ func (p *ProtocolObject) InitAdapter(iftype int, param string) error {
 
 func (p *ProtocolObject) Bind(s *Socket) {
 	p.originSocket = s
-	p.originSocket.SocketType = p.SocketType
+	p.SocketType = p.originSocket.SocketType
 	p.originSocket.Handle = p.DevHandle
 	p.originSocket.LocalIP = net.ParseIP(p.AdapterInfo.Addrs[0].IP.String())
-	p.originSocket.LocalMAC = p.AdapterInfo.MAC // 赋值原视频
+	p.originSocket.LocalMAC = p.AdapterInfo.MAC //
 	p.originSocket.SeqNum = generateRandowSeq()
 }
 
@@ -250,7 +250,7 @@ func (p *ProtocolObject) Startup() error {
 		p.originSocket.SocketType = p.SocketType
 		p.originSocket.Handle = p.DevHandle
 		p.originSocket.LocalIP = net.ParseIP(p.AdapterInfo.Addrs[0].IP.String())
-		p.originSocket.LocalMAC = p.AdapterInfo.MAC // 赋值原视频
+		p.originSocket.LocalMAC = p.AdapterInfo.MAC //
 		p.originSocket.SeqNum = generateRandowSeq()
 		p.originSocket.LocalPort = uint16(GeneratePort())
 	}
