@@ -120,6 +120,7 @@ func GenerateTCPPackage(srcIP net.IP,
 		}
 		tcp.Seq = seq
 		tcp.Ack = ack
+		tcp.Payload = append(tcp.Payload, payload...)
 		tcp.Options = append(tcp.Options, options...)
 		tcp.SetNetworkLayerForChecksum(ipv6)
 
@@ -142,7 +143,7 @@ func GenerateTCPPackage(srcIP net.IP,
 			ethernet.EthernetType = 0x800
 			ethernet.DstMAC = dstMac
 			ethernet.SrcMAC = srcMac
-			err := gopacket.SerializeLayers(buf, opts, ethernet, ipv6, tcp, gopacket.Payload(payload))
+			err := gopacket.SerializeLayers(buf, opts, ethernet, ipv6, tcp)
 			if err != nil {
 				return nil, err
 			}
