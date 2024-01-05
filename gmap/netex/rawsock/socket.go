@@ -137,6 +137,7 @@ type TCPSock struct {
 	TsEcho                                     uint32 // 时间戳相关
 	MSS                                        uint16 // 最大报文长度
 	WinSize                                    uint16 // 窗口大小
+	RecvdWinSize                               uint16 // 接收窗口大小
 }
 
 type UDPSock struct {
@@ -187,6 +188,23 @@ func NewSocket() *Socket {
 func (p *Socket) Clone() *Socket {
 
 	return nil
+}
+
+// 获取下一个包的seq,表示发送下一个包，这个值就是对应的seq
+func (p *Socket) GetNextSeq() uint32 {
+	if p.SocketType == SocketType_STREAM {
+		// ack 不消费顺序号
+		if p.PreSentSignal != TCP_SIGNAL_ACK {
+			if p.PreLenOfSent == 0 {
+				return p.SeqNum + 1
+			} else {
+				return p.SeqNum + p.PreLenOfSent
+			}
+		}
+	} else if p.SocketType == SocketType_DGRAM {
+	}
+
+	return 0
 }
 
 // 更新序列号
