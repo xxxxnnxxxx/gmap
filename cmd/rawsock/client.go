@@ -13,7 +13,6 @@ func main() {
 		fmt.Println(err)
 		return
 	}
-	client.BindSocket(0)
 	err = client.Startup()
 	if err != nil {
 		fmt.Println(err)
@@ -31,7 +30,6 @@ func main() {
 	}
 	fmt.Println(string(result))
 	ret := client.Send(socket, []byte("hello,world"))
-
 	if ret > 0 {
 		fmt.Println("数据发送成功")
 	}
