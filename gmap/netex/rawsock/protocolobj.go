@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/netip"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 )
@@ -36,6 +37,7 @@ const (
 
 type AdapterInfo struct {
 	Flag       uint32 // 接口类型
+	MTU        int    // 最大传输单元
 	IsLoopback bool
 	DevName    string
 	MAC        net.HardwareAddr
@@ -47,17 +49,11 @@ type ProtocolObject struct {
 	DevHandle  *device.DeviceHandle
 	Ifs        []pcap.Interface // 所有的接口信息
 	AdapterInfo
-	MTU int // 最大传输单元
 
-	Wg         sync.WaitGroup
-	Timeout    time.Duration // 设置监听时间 Listen的时间
-	Done       chan struct{}
-	Callback   func(*Socket, []byte) error // 数据回调
-	IsAsServer bool                        // 是否作为服务
-
+	Wg      sync.WaitGroup
+	timeout time.Duration
 	//
-	originSocket *Socket // 初始化本地信息
-
+	originSocket    *Socket // 初始化本地信息
 	lock_SocketList sync.Mutex
 	TCPSocketsList  map[string]*Socket // 保存所有的连接的socket
 	UDPSocketsList  map[string]*Socket
@@ -71,8 +67,7 @@ func NewProtocolObject(socketType int) *ProtocolObject {
 		SocketType:     socketType,
 		DevHandle:      device.NewDeviceHandle(),
 		Ifs:            make([]pcap.Interface, 0),
-		MTU:            1200,
-		Done:           make(chan struct{}),
+		timeout:        2 * time.Second,
 		originSocket:   nil,
 		TCPSocketsList: make(map[string]*Socket),
 		UDPSocketsList: make(map[string]*Socket),
@@ -83,14 +78,9 @@ func NewProtocolObject(socketType int) *ProtocolObject {
 	return instance
 }
 
-// 枚举所有的接口信息
-func (p *ProtocolObject) enumAllofInterfaces() error {
-	ifs, err := pcap.FindAllDevs()
-	if err != nil {
-		return err
-	}
-	p.Ifs = append(p.Ifs, ifs...)
-	return nil
+// connect and send
+func (p *ProtocolObject) SetTimeout(timeout time.Duration) {
+	p.timeout = timeout
 }
 
 // 参数说明
@@ -101,10 +91,11 @@ func (p *ProtocolObject) enumAllofInterfaces() error {
 // pcap打开设备需要执行一个设备连接符号，这么做的目的是方便传递
 // 没有直接指定MAC地址的原因是，不能直接获取到MAC地址
 func (p *ProtocolObject) InitAdapter(iftype int, param string) error {
-	err := p.enumAllofInterfaces()
+	ifs, err := pcap.FindAllDevs()
 	if err != nil {
 		return err
 	}
+	p.Ifs = append(p.Ifs, ifs...)
 	var deviceLnkName string
 	var flag uint32
 	IPs := make([]pcap.InterfaceAddress, 0)
@@ -232,6 +223,21 @@ func (p *ProtocolObject) InitAdapter(iftype int, param string) error {
 
 	}
 
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		fmt.Println(err)
+	}
+	for _, item := range interfaces {
+		if strings.ToLower(item.HardwareAddr.String()) == strings.ToLower(p.AdapterInfo.MAC.String()) {
+			p.AdapterInfo.MTU = item.MTU
+			break
+		}
+	}
+
+	if p.AdapterInfo.MTU == 0 {
+		p.AdapterInfo.MTU = 1200
+	}
+
 	return nil
 }
 
@@ -281,10 +287,6 @@ func (p *ProtocolObject) CloseAllofSockets() {
 
 }
 
-func (p *ProtocolObject) SetCallback(f func(*Socket, []byte) error) {
-	p.Callback = f
-}
-
 // 发送
 func (p *ProtocolObject) sendBuffer(handle *device.DeviceHandle, bytes []byte) error {
 	if handle == nil {
@@ -296,6 +298,73 @@ func (p *ProtocolObject) sendBuffer(handle *device.DeviceHandle, bytes []byte) e
 	}
 
 	return device.SendBuf(handle.Handle, bytes)
+}
+
+// 得到分包个数
+func (p *ProtocolObject) getCountOfSubPacketsForSend(s *Socket, signal int, sizeofpackets int) (int, int) {
+	// default tcp
+	options := make([]layers.TCPOption, 0)
+	switch signal {
+	case TCP_SIGNAL_SYN:
+		option_mss := layers.TCPOption{
+			OptionType:   layers.TCPOptionKindMSS,
+			OptionLength: 4,
+			OptionData:   []byte{0x05, 0xb4},
+		}
+		options = append(options, option_mss)
+	default:
+		option_nop := layers.TCPOption{
+			OptionType: layers.TCPOptionKindNop,
+		}
+
+		option_nop2 := layers.TCPOption{
+			OptionType: layers.TCPOptionKindNop,
+		}
+		options = append(options, option_nop, option_nop2)
+	}
+
+	if s.IsSupportTimestamp {
+		buf := make([]byte, 4)
+		binary.BigEndian.PutUint32(buf, s.TsEcho)
+		option_timstamp := layers.TCPOption{
+			OptionType:   layers.TCPOptionKindTimestamps,
+			OptionLength: 10,
+		}
+
+		option_timstamp.OptionData = append(option_timstamp.OptionData, getCurrentTimestampBigEndian()...)
+		option_timstamp.OptionData = append(option_timstamp.OptionData, buf...)
+
+		options = append(options, option_timstamp)
+	}
+	// 根据当前的消息类型判断处理方式
+	sendBuf, err := GenerateTCPPackage(s.LocalIP,
+		s.LocalMAC,
+		s.RemoteIP,
+		s.Nexthop,
+		s.LocalPort,
+		s.RemotePort,
+		signal,
+		s.TCPSock.SeqNum,
+		s.TCPSock.AckNum,
+		options,
+		nil,
+		s.Handle.IsLoopback)
+	if err != nil {
+		return -1, 0
+	}
+
+	lenofHeader := len(sendBuf)
+
+	countofprepacket := p.MTU - lenofHeader
+
+	count := sizeofpackets / countofprepacket
+	remainder := sizeofpackets % countofprepacket
+
+	if remainder > 0 {
+		return count + 1, countofprepacket
+	} else {
+		return count, countofprepacket
+	}
 }
 
 // 返回的值为 seq 数据
@@ -801,6 +870,7 @@ func (p *ProtocolObject) Connect(targetIP net.IP, targetPort uint16, nexthopMAC 
 	}
 	wg := new(sync.WaitGroup)
 	wg.Add(1)
+	ret := -1
 	p.originSocket.Lock.Lock()
 	p.originSocket.RemoteIP = targetIP
 	p.originSocket.RemotePort = targetPort
@@ -810,6 +880,7 @@ func (p *ProtocolObject) Connect(targetIP net.IP, targetPort uint16, nexthopMAC 
 		isNotifiy := p.originSocket.IsTriggerNotify.Load()
 		if p.originSocket.Status == TCP_ESTABLISHED && isNotifiy {
 			p.originSocket.IsTriggerNotify.Store(false)
+			ret = 1
 			wg.Done()
 		}
 	}
@@ -828,7 +899,10 @@ func (p *ProtocolObject) Connect(targetIP net.IP, targetPort uint16, nexthopMAC 
 	}
 	p.originSocket.TCPSock.Status = TCP_SYN_SENT
 	p.originSocket.Lock.Unlock()
-	wg.Wait() // 等待连接完成
+	common.WaitTimeout(wg, p.timeout)
+	if ret == -1 {
+		return nil, errors.New("time out")
+	}
 
 	return p.originSocket, nil
 }
@@ -877,45 +951,61 @@ func (p *ProtocolObject) Send(s *Socket, payload []byte) int {
 	if s == nil || len(payload) == 0 {
 		return -1
 	}
-	ret := -1
-	wg := new(sync.WaitGroup)
-	wg.Add(1)
-	var pSeqnum *uint32
 	if s.SocketType == SocketType_STREAM && s.TCPSock.Status == TCP_ESTABLISHED {
-		s.Lock.Lock()
-		s.IsTriggerNotify.Store(true)
-		s.NotifyCallback = func() {
-			isNotify := s.IsTriggerNotify.Load()
-			if s.PreSentSignal == TCP_SIGNAL_PSH|TCP_SIGNAL_ACK &&
-				s.PreRecvedSignal == TCP_SIGNAL_ACK && isNotify &&
-				s.SeqNum == *pSeqnum {
-				if s.SeqNum == s.RecvedAckNum {
-					ret = len(payload)
-					wg.Done()
+		count, countofprepacket := p.getCountOfSubPacketsForSend(s, len(payload), TCP_SIGNAL_PSH|TCP_SIGNAL_ACK)
+		i := 0
+		for {
+			if i >= count {
+				break
+			}
+			ret := -1
+			wg := new(sync.WaitGroup)
+			wg.Add(1)
+			var pSeqnum *uint32
+			buf := make([]byte, 0)
+			if len(payload)-i*countofprepacket < countofprepacket {
+				buf = append(buf, payload[i*countofprepacket:]...)
+			} else {
+				buf = append(buf, payload[i*countofprepacket:i*countofprepacket+countofprepacket]...)
+			}
+
+			s.Lock.Lock()
+			s.IsTriggerNotify.Store(true)
+			s.NotifyCallback = func() {
+				isNotify := s.IsTriggerNotify.Load()
+				if s.PreSentSignal == TCP_SIGNAL_PSH|TCP_SIGNAL_ACK &&
+					s.PreRecvedSignal == TCP_SIGNAL_ACK && isNotify &&
+					s.SeqNum == *pSeqnum {
+					if s.SeqNum == s.RecvedAckNum {
+						ret = len(payload)
+						wg.Done()
+					}
+					s.IsTriggerNotify.Store(false)
 				}
-				s.IsTriggerNotify.Store(false)
+			}
+			s.Lock.Unlock()
+			seqnum, err := p.sendTCPPacket(s, payload, TCP_SIGNAL_PSH|TCP_SIGNAL_ACK)
+			if err != nil {
+				s.SetLastError(err)
+				return -1
+			}
+			pSeqnum = &seqnum
+
+			common.WaitTimeout(wg, p.timeout)
+
+			if ret == len(payload) {
+				s.SetLastError(nil)
+			} else if ret <= 0 {
+				s.SetLastError(errors.New("send data failed"))
+				return ret
 			}
 		}
-		s.Lock.Unlock()
-		seqnum, err := p.sendTCPPacket(s, payload, TCP_SIGNAL_PSH|TCP_SIGNAL_ACK)
-		if err != nil {
-			s.SetLastError(err)
-			return -1
-		}
-		pSeqnum = &seqnum
 
 	} else if s.SocketType == SocketType_DGRAM {
 		p.Sendto(s, payload)
 	}
 
-	wg.Wait()
-
-	if ret == len(payload) {
-		s.SetLastError(nil)
-	} else if ret <= 0 {
-		s.SetLastError(errors.New("send data failed"))
-	}
-	return ret
+	return -1
 }
 
 func (p *ProtocolObject) Sendto(s *Socket, payload []byte) error {
