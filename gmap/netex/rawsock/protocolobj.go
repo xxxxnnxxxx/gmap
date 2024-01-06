@@ -301,7 +301,7 @@ func (p *ProtocolObject) sendBuffer(handle *device.DeviceHandle, bytes []byte) e
 }
 
 // 得到分包个数
-func (p *ProtocolObject) getCountOfSubPacketsForSend(s *Socket, signal int, sizeofpackets int) (int, int) {
+func (p *ProtocolObject) getCountOfSubPacketsForSend(s *Socket, sizeofpackets int, signal int) (int, int) {
 	// default tcp
 	options := make([]layers.TCPOption, 0)
 	switch signal {
@@ -984,7 +984,7 @@ func (p *ProtocolObject) Send(s *Socket, payload []byte) int {
 				}
 			}
 			s.Lock.Unlock()
-			seqnum, err := p.sendTCPPacket(s, payload, TCP_SIGNAL_PSH|TCP_SIGNAL_ACK)
+			seqnum, err := p.sendTCPPacket(s, buf, TCP_SIGNAL_PSH|TCP_SIGNAL_ACK)
 			if err != nil {
 				s.SetLastError(err)
 				return -1
@@ -999,13 +999,15 @@ func (p *ProtocolObject) Send(s *Socket, payload []byte) int {
 				s.SetLastError(errors.New("send data failed"))
 				return ret
 			}
+
+			i++
 		}
 
 	} else if s.SocketType == SocketType_DGRAM {
 		p.Sendto(s, payload)
 	}
 
-	return -1
+	return len(payload)
 }
 
 func (p *ProtocolObject) Sendto(s *Socket, payload []byte) error {
