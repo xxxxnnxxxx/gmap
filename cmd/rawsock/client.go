@@ -20,16 +20,14 @@ func main() {
 		client.CloseDevice()
 		return
 	}
-	// net.HardwareAddr{0x44, 0xAF, 0x28, 0x84, 0x94, 0x7D}
-	socket, err := client.Connect(net.ParseIP("10.10.13.224"), 12345, net.HardwareAddr{0x44, 0xAF, 0x28, 0x84, 0x94, 0x7D})
-	//socket, err := client.Connect(net.ParseIP("192.168.1.4"), 8000, net.HardwareAddr{0xe4, 0x5f, 0x01, 0x87, 0x5b, 0x1D})
+	socket, err := client.Connect(net.ParseIP("192.168.1.4"), 8000, net.HardwareAddr{0xe4, 0x5f, 0x01, 0x87, 0x5b, 0x1D})
 	var result []byte
 	recvLen := client.Recv(socket, &result)
 	if recvLen == -1 {
 		fmt.Println("连接已经断开")
 	}
 	fmt.Println(string(result))
-	ret := client.Send(socket, []byte("hello,world"))
+	ret := client.Send(socket, []byte("hello"))
 	if ret > 0 {
 		fmt.Println("数据发送成功")
 	}

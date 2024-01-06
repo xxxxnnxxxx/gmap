@@ -1,7 +1,24 @@
 package main
 
-import "fmt"
+import (
+	"Gmap/gmap/common"
+	"fmt"
+	"os"
+	"path"
+)
 import "Gmap/gmap/netex/rawsock"
+
+func readarticle() string {
+	filepath, err := common.GetCurrentDir()
+	if err != nil {
+		return ""
+	}
+	content, err := os.ReadFile(path.Join(filepath, "article.txt"))
+	if err != nil {
+		return ""
+	}
+	return string(content)
+}
 
 func main() {
 	tcpserver := rawsock.NewProtocolObject(rawsock.SocketType_STREAM)
@@ -10,7 +27,7 @@ func main() {
 		fmt.Println(err)
 		return
 	}
-	socket := rawsock.CreateSocket(rawsock.SocketType_STREAM, 55555)
+	socket := rawsock.CreateSocket(rawsock.SocketType_STREAM, 8000)
 	tcpserver.Bind(socket)
 	err = tcpserver.Startup()
 	if err != nil {
@@ -34,7 +51,7 @@ func main() {
 		fmt.Println("连接已经断开")
 	}
 	fmt.Println(string(result))
-	ret := tcpserver.Send(client, []byte("hello,world"))
+	ret := tcpserver.Send(client, []byte("i am server:"+socket.LocalIP.String()+"! hello "+client.RemoteIP.String()))
 	if ret == -1 {
 		fmt.Println(client.GetLastError())
 		return
