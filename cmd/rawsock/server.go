@@ -37,8 +37,8 @@ func main() {
 		return
 	}
 
-	client, err := tcpserver.Accept()
-	if err != nil {
+	client, ret := tcpserver.Accept()
+	if ret == -1 {
 		fmt.Println(err)
 		tcpserver.CloseAllofSockets()
 		tcpserver.CloseDevice()
@@ -51,7 +51,7 @@ func main() {
 		fmt.Println("连接已经断开")
 	}
 	fmt.Println(string(result))
-	ret := tcpserver.Send(client, []byte("i am server:"+socket.LocalIP.String()+"! hello "+client.RemoteIP.String()))
+	ret = tcpserver.Send(client, []byte("i am server:"+socket.LocalIP.String()+"! hello "+client.RemoteIP.String()))
 	if ret == -1 {
 		fmt.Println(client.GetLastError())
 		return

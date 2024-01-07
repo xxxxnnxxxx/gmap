@@ -301,7 +301,7 @@ func (p *ProtocolObject) sendBuffer(handle *device.DeviceHandle, bytes []byte) e
 }
 
 // 得到分包个数
-func (p *ProtocolObject) getCountOfSubPacketsForSend(s *Socket, sizeofpackets int, signal int) (int, int) {
+func (p *ProtocolObject) getCountOfSubPacketsForTCPSend(s *Socket, sizeofpackets int, signal int) (int, int) {
 	// default tcp
 	options := make([]layers.TCPOption, 0)
 	switch signal {
@@ -349,6 +349,39 @@ func (p *ProtocolObject) getCountOfSubPacketsForSend(s *Socket, sizeofpackets in
 		options,
 		nil,
 		s.Handle.IsLoopback)
+	if err != nil {
+		return -1, 0
+	}
+
+	lenofHeader := len(sendBuf)
+
+	countofprepacket := p.MTU - lenofHeader
+
+	count := sizeofpackets / countofprepacket
+	remainder := sizeofpackets % countofprepacket
+
+	if remainder > 0 {
+		return count + 1, countofprepacket
+	} else {
+		return count, countofprepacket
+	}
+}
+
+func (p *ProtocolObject) getCountOfSubPacketsForUDPSend(s *Socket, sizeofpackets int) (int, int) {
+	// 根据当前的消息类型判断处理方式
+	sendBuf, err := GenerateUDPPackage(s.LocalIP,
+		s.LocalMAC,
+		s.RemoteIP,
+		s.Nexthop,
+		s.LocalPort,
+		s.RemotePort,
+		nil,
+		s.Handle.IsLoopback)
+	if err != nil {
+		return -1, 0
+	}
+
+	err = p.sendBuffer(s.Handle, sendBuf)
 	if err != nil {
 		return -1, 0
 	}
@@ -468,8 +501,25 @@ func (p *ProtocolObject) sendTCPPacket(s *Socket, payload []byte, signal int) (u
 	return s.SeqNum, err
 }
 
-func (p *ProtocolObject) sendUDPPacket(s *Socket, payload []byte) error {
-	return nil
+func (p *ProtocolObject) sendUDPPacket(s *Socket, payload []byte) (int, error) {
+	// 根据当前的消息类型判断处理方式
+	sendBuf, err := GenerateUDPPackage(s.LocalIP,
+		s.LocalMAC,
+		s.RemoteIP,
+		s.Nexthop,
+		s.LocalPort,
+		s.RemotePort,
+		payload,
+		s.Handle.IsLoopback)
+	if err != nil {
+		return 0, err
+	}
+
+	err = p.sendBuffer(s.Handle, sendBuf)
+	if err != nil {
+		return 0, err
+	}
+	return len(payload), nil
 }
 
 func (p *ProtocolObject) msgLoop() error {
@@ -907,9 +957,11 @@ func (p *ProtocolObject) Connect(targetIP net.IP, targetPort uint16, nexthopMAC 
 	return p.originSocket, nil
 }
 
-func (p *ProtocolObject) Accept() (*Socket, error) {
+func (p *ProtocolObject) Accept() (*Socket, int) {
+	if p.originSocket == nil {
+		return nil, -1
+	}
 	var result *Socket = nil
-
 	for {
 		entity := p.accpetStack.Pop()
 		if entity != nil {
@@ -921,7 +973,7 @@ func (p *ProtocolObject) Accept() (*Socket, error) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	return result, nil
+	return result, 0
 }
 
 func (p *ProtocolObject) Recv(s *Socket, result *[]byte) int {
@@ -951,8 +1003,11 @@ func (p *ProtocolObject) Send(s *Socket, payload []byte) int {
 	if s == nil || len(payload) == 0 {
 		return -1
 	}
-	if s.SocketType == SocketType_STREAM && s.TCPSock.Status == TCP_ESTABLISHED {
-		count, countofprepacket := p.getCountOfSubPacketsForSend(s, len(payload), TCP_SIGNAL_PSH|TCP_SIGNAL_ACK)
+	if s.SocketType == SocketType_STREAM {
+		if s.TCPSock.Status != TCP_ESTABLISHED {
+			return -1
+		}
+		count, countofprepacket := p.getCountOfSubPacketsForTCPSend(s, len(payload), TCP_SIGNAL_PSH|TCP_SIGNAL_ACK)
 		i := 0
 		for {
 			if i >= count {
@@ -1010,11 +1065,40 @@ func (p *ProtocolObject) Send(s *Socket, payload []byte) int {
 	return len(payload)
 }
 
-func (p *ProtocolObject) Sendto(s *Socket, payload []byte) error {
-	return nil
+func (p *ProtocolObject) Sendto(s *Socket, payload []byte) int {
+	if p.SocketType != SocketType_DGRAM {
+		return -1
+	}
+
+	count, countofprepacket := p.getCountOfSubPacketsForUDPSend(s, len(payload))
+	i := 0
+	for {
+		if i >= count {
+			break
+		}
+
+		buf := make([]byte, 0)
+		if len(payload)-i*countofprepacket < countofprepacket {
+			buf = append(buf, payload[i*countofprepacket:]...)
+		} else {
+			buf = append(buf, payload[i*countofprepacket:i*countofprepacket+countofprepacket]...)
+		}
+
+		_, err := p.sendUDPPacket(s, buf)
+		if err != nil {
+			s.SetLastError(err)
+			return -1
+		}
+
+		i++
+	}
+	return len(payload)
 }
 
 func (p *ProtocolObject) Close(s *Socket) int {
-	p.sendTCPPacket(s, nil, TCP_SIGNAL_FIN|TCP_SIGNAL_ACK)
+	if p.SocketType == SocketType_STREAM {
+		p.sendTCPPacket(s, nil, TCP_SIGNAL_FIN|TCP_SIGNAL_ACK)
+	}
+
 	return -1
 }
