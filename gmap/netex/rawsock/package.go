@@ -169,7 +169,7 @@ func GenerateUDPPackage(srcIP net.IP,
 		// ip layer
 		ipv4 := &layers.IPv4{}
 		ipv4.Version = 4
-		ipv4.Protocol = layers.IPProtocolTCP
+		ipv4.Protocol = layers.IPProtocolUDP
 		ipv4.SrcIP = srcIP
 		ipv4.DstIP = dstIP
 		//ipv4.Length = 20
@@ -179,8 +179,6 @@ func GenerateUDPPackage(srcIP net.IP,
 		udp := &layers.UDP{}
 		udp.SrcPort = layers.UDPPort(srcPort)
 		udp.DstPort = layers.UDPPort(dstPort)
-		udp.Payload = append(udp.Payload, payload...)
-
 		udp.SetNetworkLayerForChecksum(ipv4)
 
 		// options
@@ -192,7 +190,7 @@ func GenerateUDPPackage(srcIP net.IP,
 		if isLoopback {
 			loopbackLayer := &layers.Loopback{}
 			loopbackLayer.Family = layers.ProtocolFamilyIPv4
-			err := gopacket.SerializeLayers(buf, opts, loopbackLayer, ipv4, udp)
+			err := gopacket.SerializeLayers(buf, opts, loopbackLayer, ipv4, udp, gopacket.Payload(payload))
 			if err != nil {
 				return nil, err
 			}
@@ -202,7 +200,7 @@ func GenerateUDPPackage(srcIP net.IP,
 			ethernet.EthernetType = 0x800
 			ethernet.DstMAC = dstMac
 			ethernet.SrcMAC = srcMac
-			err := gopacket.SerializeLayers(buf, opts, ethernet, ipv4, udp)
+			err := gopacket.SerializeLayers(buf, opts, ethernet, ipv4, udp, gopacket.Payload(payload))
 
 			if err != nil {
 				return nil, err
@@ -214,7 +212,7 @@ func GenerateUDPPackage(srcIP net.IP,
 		// ip layer
 		ipv6 := &layers.IPv6{}
 		ipv6.Version = 4
-		ipv6.NextHeader = layers.IPProtocolTCP
+		ipv6.NextHeader = layers.IPProtocolUDP
 		ipv6.SrcIP = srcIP
 		ipv6.DstIP = dstIP
 		//ipv4.Length = 20
@@ -224,7 +222,6 @@ func GenerateUDPPackage(srcIP net.IP,
 		udp := &layers.UDP{}
 		udp.SrcPort = layers.UDPPort(srcPort)
 		udp.DstPort = layers.UDPPort(dstPort)
-		udp.Payload = append(udp.Payload, payload...)
 
 		udp.SetNetworkLayerForChecksum(ipv6)
 
@@ -236,8 +233,8 @@ func GenerateUDPPackage(srcIP net.IP,
 		buf := gopacket.NewSerializeBuffer()
 		if isLoopback {
 			loopbackLayer := &layers.Loopback{}
-			loopbackLayer.Family = layers.ProtocolFamilyIPv4
-			err := gopacket.SerializeLayers(buf, opts, loopbackLayer, ipv6, udp)
+			loopbackLayer.Family = layers.ProtocolFamilyIPv6Linux
+			err := gopacket.SerializeLayers(buf, opts, loopbackLayer, ipv6, udp, gopacket.Payload(payload))
 			if err != nil {
 				return nil, err
 			}
@@ -247,7 +244,7 @@ func GenerateUDPPackage(srcIP net.IP,
 			ethernet.EthernetType = 0x800
 			ethernet.DstMAC = dstMac
 			ethernet.SrcMAC = srcMac
-			err := gopacket.SerializeLayers(buf, opts, ethernet, ipv6, udp)
+			err := gopacket.SerializeLayers(buf, opts, ethernet, ipv6, udp, gopacket.Payload(payload))
 
 			if err != nil {
 				return nil, err

@@ -381,11 +381,6 @@ func (p *ProtocolObject) getCountOfSubPacketsForUDPSend(s *Socket, sizeofpackets
 		return -1, 0
 	}
 
-	err = p.sendBuffer(s.Handle, sendBuf)
-	if err != nil {
-		return -1, 0
-	}
-
 	lenofHeader := len(sendBuf)
 
 	countofprepacket := p.MTU - lenofHeader
@@ -605,6 +600,7 @@ func (p *ProtocolObject) msgLoop() error {
 						if !ok {
 							return
 						}
+						acceptSock.LocalMAC = append(acceptSock.LocalMAC, eth.DstMAC...)
 						acceptSock.Nexthop = append(acceptSock.Nexthop, eth.SrcMAC...)
 					} else {
 						loopbackLayer := packet.Layer(layers.LayerTypeLoopback)
@@ -622,12 +618,6 @@ func (p *ProtocolObject) msgLoop() error {
 					// 本地信息
 					acceptSock.LocalIP = append(acceptSock.LocalIP, dstIP...)
 					acceptSock.LocalPort = uint16(tcp.DstPort)
-
-					// 如果是非回环的地址，则直接拷贝目的MAC地址到本地MAC地址
-					if !acceptSock.Handle.IsLoopback {
-						acceptSock.LocalMAC = append(acceptSock.LocalMAC, eth.DstMAC...)
-					}
-
 					// 序号
 					acceptSock.TCPSock.RecvedAckNum = tcp.Ack
 					acceptSock.TCPSock.RecvedSeqNum = tcp.Seq
@@ -656,7 +646,7 @@ func (p *ProtocolObject) msgLoop() error {
 						return
 					}
 
-					if uint16(udp.DstPort) != p.originSocket.LocalPort && !dstIP.Equal(p.originSocket.LocalIP) {
+					if uint16(udp.DstPort) != p.originSocket.LocalPort || !dstIP.Equal(p.originSocket.LocalIP) {
 						return
 					}
 
@@ -664,6 +654,11 @@ func (p *ProtocolObject) msgLoop() error {
 					var eth *layers.Ethernet
 					if ethLayer != nil {
 						eth, ok = ethLayer.(*layers.Ethernet)
+						if !ok {
+							return
+						}
+						acceptSock.LocalMAC = append(acceptSock.LocalMAC, eth.DstMAC...)
+						acceptSock.Nexthop = append(acceptSock.Nexthop, eth.SrcMAC...)
 					} else {
 						loopbackLayer := packet.Layer(layers.LayerTypeLoopback)
 						loopback, ok := loopbackLayer.(*layers.Loopback)
@@ -678,8 +673,6 @@ func (p *ProtocolObject) msgLoop() error {
 					acceptSock.RemotePort = uint16(udp.SrcPort)
 					acceptSock.LocalIP = append(acceptSock.LocalIP, dstIP...)
 					acceptSock.LocalPort = uint16(udp.DstPort)
-					acceptSock.LocalMAC = append(acceptSock.LocalMAC, eth.DstMAC...)
-
 					acceptSock.RecvedPayload = append(acceptSock.RecvedPayload, udp.Payload...)
 				}
 
@@ -689,34 +682,6 @@ func (p *ProtocolObject) msgLoop() error {
 	}(&p.Wg)
 
 	return nil
-}
-
-func (p *ProtocolObject) tcpsignalHandle(s *Socket, buf []byte) (int, error) {
-	var tcp_signal int
-	if s.SocketType == SocketType_STREAM {
-
-		if s.TCPSock.SYN {
-			tcp_signal |= TCP_SIGNAL_SYN
-		}
-		if s.TCPSock.RST {
-			tcp_signal |= TCP_SIGNAL_RST
-		}
-		if s.TCPSock.ACK {
-			tcp_signal |= TCP_SIGNAL_ACK
-		}
-		if s.TCPSock.FIN {
-			tcp_signal |= TCP_SIGNAL_FIN
-		}
-		if s.TCPSock.URG {
-			tcp_signal |= TCP_SIGNAL_URG
-		}
-		if s.TCPSock.PSH {
-			tcp_signal |= TCP_SIGNAL_PSH
-		}
-	} else {
-		return 0, errors.New("no info")
-	}
-	return tcp_signal, nil
 }
 
 func (p *ProtocolObject) protocolStackHandle(s *Socket) error {
@@ -865,8 +830,19 @@ func (p *ProtocolObject) protocolStackHandle(s *Socket) error {
 				pSock.NotifyCallback()
 			}
 		}
-	} else if pSock.SocketType == SocketType_DGRAM {
+	} else if s.SocketType == SocketType_DGRAM {
+		pSock = p.originSocket
+		pSock.Lock.Lock()
+		defer pSock.Lock.Unlock()
 
+		pSock.RemoteIP = append(pSock.RemoteIP, s.RemoteIP...)
+		pSock.RemotePort = s.RemotePort
+		pSock.Nexthop = append(pSock.Nexthop, s.Nexthop...)
+
+		// 处理数据
+		if len(s.RecvedPayload) > 0 {
+			pSock.DataBuf.Write(s.RecvedPayload)
+		}
 	}
 
 	return nil
@@ -961,6 +937,10 @@ func (p *ProtocolObject) Accept() (*Socket, int) {
 	if p.originSocket == nil {
 		return nil, -1
 	}
+
+	if p.SocketType != SocketType_STREAM {
+		return nil, -1
+	}
 	var result *Socket = nil
 	for {
 		entity := p.accpetStack.Pop()
@@ -977,7 +957,7 @@ func (p *ProtocolObject) Accept() (*Socket, int) {
 }
 
 func (p *ProtocolObject) Recv(s *Socket, result *[]byte) int {
-	if result == nil {
+	if result == nil || s == nil {
 		return -1
 	}
 	lenofresult := 0
@@ -991,7 +971,27 @@ func (p *ProtocolObject) Recv(s *Socket, result *[]byte) int {
 				break
 			}
 		} else if s.SocketType == SocketType_DGRAM {
+			if s.DataBuf.Length() > 0 {
+				*result, lenofresult = s.DataBuf.Read()
+				break
+			}
+		}
 
+		runtime.Gosched()
+	}
+	return lenofresult
+}
+
+func (p *ProtocolObject) RecvFrom(result *[]byte) int {
+	if p.originSocket.SocketType != SocketType_DGRAM {
+		*result = nil
+		return -1
+	}
+	lenofresult := 0
+	for {
+		if p.originSocket.DataBuf.Length() > 0 {
+			*result, lenofresult = p.originSocket.DataBuf.Read()
+			break
 		}
 
 		runtime.Gosched()
@@ -1059,18 +1059,26 @@ func (p *ProtocolObject) Send(s *Socket, payload []byte) int {
 		}
 
 	} else if s.SocketType == SocketType_DGRAM {
-		p.Sendto(s, payload)
+		p.Sendto(s.RemoteIP, s.RemotePort, s.Nexthop, payload)
 	}
 
 	return len(payload)
 }
 
-func (p *ProtocolObject) Sendto(s *Socket, payload []byte) int {
+func (p *ProtocolObject) Sendto(targetIP net.IP, targetPort uint16, nexthopMAC net.HardwareAddr, payload []byte) int {
 	if p.SocketType != SocketType_DGRAM {
 		return -1
 	}
 
-	count, countofprepacket := p.getCountOfSubPacketsForUDPSend(s, len(payload))
+	p.originSocket.RemotePort = targetPort
+	if len(p.originSocket.RemoteIP) == 0 {
+		p.originSocket.RemoteIP = append(p.originSocket.RemoteIP, targetIP...)
+	}
+	if len(p.originSocket.Nexthop) == 0 {
+		p.originSocket.Nexthop = append(p.originSocket.Nexthop, nexthopMAC...)
+	}
+
+	count, countofprepacket := p.getCountOfSubPacketsForUDPSend(p.originSocket, len(payload))
 	i := 0
 	for {
 		if i >= count {
@@ -1084,9 +1092,9 @@ func (p *ProtocolObject) Sendto(s *Socket, payload []byte) int {
 			buf = append(buf, payload[i*countofprepacket:i*countofprepacket+countofprepacket]...)
 		}
 
-		_, err := p.sendUDPPacket(s, buf)
+		_, err := p.sendUDPPacket(p.originSocket, buf)
 		if err != nil {
-			s.SetLastError(err)
+			p.originSocket.SetLastError(err)
 			return -1
 		}
 
